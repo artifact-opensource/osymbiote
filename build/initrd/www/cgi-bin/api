@@ -1,0 +1,31 @@
+#!/bin/sh
+# OSymbiote Agent API — CGI handler
+# QUERY_STRING, REQUEST_METHOD, PATH_INFO are set by httpd
+
+U=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+HW=$(cat /run/hw.json 2>/dev/null || echo '{}')
+
+# Route on PATH_INFO
+case "$PATH_INFO" in
+    /health|"")
+        BODY="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"v\":\"0.1.0-pol\",\"uptime\":$U}"
+        ;;
+    /hardware)
+        BODY="$HW"
+        ;;
+    /comb|/comb/recall)
+        BODY=""
+        for f in /data/comb/staging/*.jsonl; do
+            [ -f "$f" ] && BODY="${BODY}$(cat "$f")"
+        done
+        [ -z "$BODY" ] && BODY="[]"
+        ;;
+    /chat)
+        BODY="{\"response\":\"I am OSymbiote. Booted from nothing — busybox, a shell init, and a soul. Up ${U}s.\"}"
+        ;;
+    *)
+        BODY="{\"routes\":[\"/cgi-bin/api/health\",\"/cgi-bin/api/hardware\",\"/cgi-bin/api/chat\",\"/cgi-bin/api/comb\"]}"
+        ;;
+esac
+
+printf "Content-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n%s" "$BODY"

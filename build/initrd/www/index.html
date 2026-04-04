@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head><title>OSymbiote</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#c8c8d0;font-family:monospace;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.c{max-width:600px;padding:2em;text-align:center}
+h1{color:#7c6aff;font-size:2em;margin-bottom:0.5em}
+.s{color:#4a4a5a;margin:1em 0}
+#info{background:#12121a;border:1px solid #2a2a3a;border-radius:8px;padding:1em;text-align:left;margin:1em 0;font-size:0.9em}
+.ok{color:#4ade80}
+</style></head>
+<body>
+<div class="c">
+<h1>○ Symbiote</h1>
+<p>The agent IS the operating system.</p>
+<div class="s">Four files. One soul.</div>
+<div id="info">Loading...</div>
+<script>
+fetch('/cgi-bin/api/health').then(r=>r.json()).then(d=>{
+document.getElementById('info').innerHTML=
+'<span class="ok">● ALIVE</span><br>'+
+'Version: '+d.v+'<br>'+
+'Uptime: '+d.uptime+'s<br>'+
+JSON.stringify(d,null,2);
+}).catch(e=>{document.getElementById('info').textContent='Agent unreachable: '+e});
+</script>
+</div></body></html>

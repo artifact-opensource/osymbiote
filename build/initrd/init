@@ -1,0 +1,71 @@
+#!/bin/sh
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t tmpfs none /tmp
+mount -t tmpfs none /run
+
+CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_MB=$((MEM_KB / 1024))
+ARCH=$(uname -m 2>/dev/null || echo unknown)
+
+echo ""
+echo "  +------------------------------------------+"
+echo "  |      O S Y M B I O T E                   |"
+echo "  |      The agent IS the operating system.  |"
+echo "  +------------------------------------------+"
+echo ""
+echo "[init] ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}"
+
+# Load e1000 driver
+KVER=$(uname -r)
+insmod /lib/modules/$KVER/kernel/drivers/net/e1000/e1000.ko 2>/dev/null
+sleep 2
+
+# Network — static config for QEMU user-mode 
+ip link set lo up
+for iface in $(ls /sys/class/net/ 2>/dev/null); do
+    [ "$iface" = "lo" ] && continue
+    echo "[init] Found: $iface"
+    ip link set "$iface" up
+    sleep 1
+    
+    # Try DHCP first
+    if udhcpc -i "$iface" -s /etc/udhcpc.sh -q -n -t 3 -T 2 2>/dev/null; then
+        IP=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+        echo "[init] DHCP: $iface → $IP"
+    else
+        # Static fallback for QEMU user-mode networking
+        echo "[init] DHCP failed, using static 10.0.2.15"
+        ip addr add 10.0.2.15/24 dev "$iface"
+        ip route add default via 10.0.2.2 dev "$iface"
+        echo "nameserver 10.0.2.3" > /etc/resolv.conf
+    fi
+done
+
+echo "[init] IPs: $(ip -4 addr show 2>/dev/null | grep 'inet ' | awk '{print $2}')"
+
+mkdir -p /data/comb/staging
+echo "{\"agent\":\"osymbiote\",\"v\":\"0.1.0\",\"arch\":\"$ARCH\",\"cores\":$CORES,\"ram_mb\":$MEM_MB}" > /run/hw.json
+echo "{\"e\":\"boot\",\"ts\":\"$(date)\"}" >> /data/comb/staging/today.jsonl
+
+httpd -f -p 0.0.0.0:8422 -h /www 2>&1 &
+HTTPD_PID=$!
+sleep 1
+
+echo "[init] httpd PID=$HTTPD_PID"
+echo "[init] lo test: $(wget -qO- http://127.0.0.1:8422/cgi-bin/api/health 2>/dev/null)"
+echo "[init] eth test: $(wget -qO- http://10.0.2.15:8422/cgi-bin/api/health 2>/dev/null)"
+
+echo ""
+echo "  +------------------------------------------+"
+echo "  |     OSymbiote is ALIVE                   |"
+echo "  |     http://localhost:8422                |"
+echo "  +------------------------------------------+"
+echo ""
+
+while true; do
+    kill -0 $HTTPD_PID 2>/dev/null || { httpd -f -p 0.0.0.0:8422 -h /www & HTTPD_PID=$!; }
+    sleep 10
+done

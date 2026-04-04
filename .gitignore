@@ -1,0 +1,20 @@
+# Build artifacts
+build/vmlinuz
+build/bzImage
+build/modloop-*
+build/busybox-x86_64
+build/initrd/bin/busybox
+build/initrd/lib/
+build/initrd.cpio.gz
+
+# Boot images
+images/initramfs.cpio.gz
+*.img
+*.iso
+*.mount
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
