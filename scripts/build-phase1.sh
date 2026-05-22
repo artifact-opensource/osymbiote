@@ -51,9 +51,10 @@ else
     echo "  Non-Termux host detected; skipping pkg install."
 fi
 
-for t in qemu-system-x86_64 wget cpio gzip; do
+for t in wget cpio gzip; do
     require_tool "$t"
 done
+command -v qemu-system-x86_64 >/dev/null 2>&1 || echo "  WARN: qemu-system-x86_64 not found (build will still complete)."
 
 # ═══════════════════════════════════════════════
 # Step 2: Get x86_64 kernel (Alpine netboot)
@@ -480,7 +481,7 @@ echo "║                                                      ║"
 echo "║  Kernel:     $KERN_SIZE (Alpine virt, x86_64)"
 echo "║  Initramfs:  $INIT_SIZE (busybox + init + comb + agent)"
 echo "║                                                      ║"
-echo "║  To boot:    ~/osymbiote/boot.sh                     ║"
-echo "║  To test:    ~/osymbiote/test.sh (in another shell)  ║"
+echo "║  To boot:    $OSYM/boot.sh"
+echo "║  To test:    $OSYM/test.sh (in another shell)"
 echo "║  Agent at:   http://localhost:18422                  ║"
 echo "╚══════════════════════════════════════════════════════╝"
