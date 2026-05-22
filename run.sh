@@ -40,7 +40,14 @@ if [ "$1" = "--background" ]; then
     QEMU_PID=$!
     echo "QEMU PID: $QEMU_PID"
     sleep 5
-    if curl -s --max-time 3 "http://127.0.0.1:${PORT}/cgi-bin/api/health" | grep -q alive; then
+    HEALTH_OK=0
+    for path in "/health" "/cgi-bin/api/health" "/cgi-bin/api?action=status" "/"; do
+        if curl -s --max-time 3 "http://127.0.0.1:${PORT}${path}" | grep -q '"status":"alive"\|alive'; then
+            HEALTH_OK=1
+            break
+        fi
+    done
+    if [ "$HEALTH_OK" -eq 1 ]; then
         echo "✅ OSymbiote is ALIVE"
     else
         echo "⚠️  Health check failed (may still be booting)"

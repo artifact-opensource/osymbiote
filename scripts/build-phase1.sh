@@ -6,7 +6,8 @@
 # Solution: Download pre-built x86_64 static binaries
 
 set -euo pipefail
-OSYM="$HOME/osymbiote"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OSYM="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD="$OSYM/build"
 IMAGES="$OSYM/images"
 ROOTFS="$OSYM/rootfs-x86"
@@ -18,13 +19,40 @@ echo "╚═══════════════════════�
 
 mkdir -p "$BUILD" "$IMAGES" "$ROOTFS"
 
+require_tool() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "  ERROR: Missing required tool: $1"
+        exit 1
+    }
+}
+
+download_file() {
+    local dst="$1"
+    shift
+    local url
+    for url in "$@"; do
+        if wget -q --show-progress -O "$dst" "$url" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ═══════════════════════════════════════════════
 # Step 1: Install QEMU and tools
 # ═══════════════════════════════════════════════
 echo "[1/6] Installing packages..."
-pkg upgrade -y 2>/dev/null || true
-for p in qemu-system-x86-64 wget curl coreutils; do
-    pkg install -y "$p" 2>/dev/null || echo "  $p already installed or unavailable"
+if command -v pkg >/dev/null 2>&1; then
+    pkg upgrade -y 2>/dev/null || true
+    for p in qemu-system-x86-64 wget curl coreutils cpio gzip; do
+        pkg install -y "$p" 2>/dev/null || echo "  $p already installed or unavailable"
+    done
+else
+    echo "  Non-Termux host detected; skipping pkg install."
+fi
+
+for t in qemu-system-x86_64 wget cpio gzip; do
+    require_tool "$t"
 done
 
 # ═══════════════════════════════════════════════
@@ -51,16 +79,66 @@ fi
 # ═══════════════════════════════════════════════
 echo "[3/6] Getting x86_64 static busybox..."
 if [ ! -f "$BUILD/busybox-x86_64" ]; then
-    wget -q --show-progress -O "$BUILD/busybox-x86_64" \
-        "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" 2>&1 || {
-        echo "  Trying alternative..."
-        wget -q -O "$BUILD/busybox-x86_64" \
-            "https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64" 2>&1 || {
-            echo "  ERROR: Cannot download busybox. Check internet."
+    if ! download_file "$BUILD/busybox-x86_64" \
+        "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch-musl/busybox-x86_64" \
+        "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" \
+        "https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64"; then
+        echo "  busybox.net failed, trying Alpine busybox-static..."
+        TMPDIR="$(mktemp -d)"
+        trap 'rm -rf "$TMPDIR"' EXIT
+        APKINDEX_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/APKINDEX.tar.gz"
+
+        wget -q -O "$TMPDIR/APKINDEX.tar.gz" "$APKINDEX_URL" 2>/dev/null || {
+            echo "  ERROR: Cannot fetch Alpine APK index."
             exit 1
         }
-    }
+
+        tar -xzf "$TMPDIR/APKINDEX.tar.gz" -C "$TMPDIR" APKINDEX
+        BB_VER=$(
+            awk -v RS='' '
+                $0 ~ /\nP:busybox-static\n/ {
+                    if (match($0, /\nV:([^\n]+)/, m)) {
+                        print m[1]
+                        exit
+                    }
+                }
+            ' "$TMPDIR/APKINDEX"
+        )
+
+        [ -n "${BB_VER:-}" ] || {
+            echo "  ERROR: Could not resolve busybox-static version from Alpine index."
+            exit 1
+        }
+
+        APK_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/busybox-static-${BB_VER}.apk"
+        wget -q -O "$TMPDIR/busybox.apk" "$APK_URL" 2>/dev/null || {
+            echo "  ERROR: Cannot download Alpine busybox-static package."
+            exit 1
+        }
+
+        if tar -tf "$TMPDIR/busybox.apk" | grep -q '^bin/busybox.static$'; then
+            tar -xzf "$TMPDIR/busybox.apk" -C "$TMPDIR" bin/busybox.static
+            cp "$TMPDIR/bin/busybox.static" "$BUILD/busybox-x86_64"
+        elif tar -tf "$TMPDIR/busybox.apk" | grep -q '^bin/busybox$'; then
+            tar -xzf "$TMPDIR/busybox.apk" -C "$TMPDIR" bin/busybox
+            cp "$TMPDIR/bin/busybox" "$BUILD/busybox-x86_64"
+        else
+            echo "  ERROR: busybox binary not found in Alpine package."
+            exit 1
+        fi
+        rm -rf "$TMPDIR"
+        trap - EXIT
+    fi
+
     chmod +x "$BUILD/busybox-x86_64"
+
+    if command -v file >/dev/null 2>&1; then
+        file "$BUILD/busybox-x86_64" | grep -qi "x86-64" || {
+            echo "  ERROR: Downloaded busybox is not x86_64."
+            exit 1
+        }
+    fi
+
     echo "  Busybox: $(du -h "$BUILD/busybox-x86_64" | cut -f1)"
 else
     echo "  Busybox cached."
