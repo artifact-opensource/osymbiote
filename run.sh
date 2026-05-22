@@ -50,8 +50,8 @@ if [ "$1" = "--background" ]; then
         exit 1
     fi
     HEALTH_OK=0
-    for path in "/health" "/cgi-bin/api/health" "/cgi-bin/api?action=status" "/"; do
-        if curl -s --max-time 3 "http://127.0.0.1:${PORT}${path}" | grep -q '"status":"alive"\|alive'; then
+    for path in "/health" "/cgi-bin/api/health" "/cgi-bin/api?action=status"; do
+        if curl -s --max-time 3 "http://127.0.0.1:${PORT}${path}" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"alive"'; then
             HEALTH_OK=1
             break
         fi
