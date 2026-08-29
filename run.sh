@@ -16,6 +16,11 @@ if [ ! -f "$KERNEL" ] || [ ! -f "$INITRD" ]; then
     exit 1
 fi
 
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    echo "Missing qemu-system-x86_64. Install QEMU and retry."
+    exit 1
+fi
+
 echo "┌──────────────────────────────────┐"
 echo "│  OSymbiote — Starting...         │"
 echo "│  API: http://localhost:$PORT      │"
@@ -40,7 +45,18 @@ if [ "$1" = "--background" ]; then
     QEMU_PID=$!
     echo "QEMU PID: $QEMU_PID"
     sleep 5
-    if curl -s --max-time 3 "http://127.0.0.1:${PORT}/cgi-bin/api/health" | grep -q alive; then
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        echo "❌ QEMU exited during startup. Check host QEMU support."
+        exit 1
+    fi
+    HEALTH_OK=0
+    for path in "/health" "/cgi-bin/api/health" "/cgi-bin/api?action=status"; do
+        if curl -s --max-time 3 "http://127.0.0.1:${PORT}${path}" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"alive"'; then
+            HEALTH_OK=1
+            break
+        fi
+    done
+    if [ "$HEALTH_OK" -eq 1 ]; then
         echo "✅ OSymbiote is ALIVE"
     else
         echo "⚠️  Health check failed (may still be booting)"
