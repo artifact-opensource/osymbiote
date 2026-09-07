@@ -590,7 +590,14 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                     record_auth_success
                     NOW="$(now_epoch)"
                     EXPIRES_AT=$((NOW + SESSION_TTL))
-                    TOKEN="$(printf '%s' "${NOW}-${BODY}-$$-$(cat /proc/uptime 2>/dev/null)" | /bin/busybox sha256sum | awk '{print $1}')"
+                    TOKEN_SRC="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+                    if [ -z "$TOKEN_SRC" ] && [ -r /dev/urandom ]; then
+                        TOKEN_SRC="$(head -c 32 /dev/urandom | /bin/busybox od -An -tx1 | tr -d ' \n')"
+                    fi
+                    if [ -z "$TOKEN_SRC" ]; then
+                        TOKEN_SRC="${NOW}-$$-$(cat /proc/uptime 2>/dev/null)"
+                    fi
+                    TOKEN="$(printf '%s' "$TOKEN_SRC" | /bin/busybox sha256sum | awk '{print $1}')"
                     printf '%s|%s\n' "$TOKEN" "$EXPIRES_AT" > "$SESSION_FILE"
                     EXTRA_HEADERS="Set-Cookie: osym_session=${TOKEN}; HttpOnly; Path=/; Max-Age=${SESSION_TTL}\r\n"
                     RESP="{\"status\":\"ok\",\"expires_in\":$SESSION_TTL}"
@@ -861,7 +868,7 @@ cat > "$OSYM/test.sh" << 'TESTSCRIPT'
 set -eu
 
 BASE_URL="${OSYM_BASE_URL:-http://localhost:18422}"
-SETUP_PASSWORD="${OSYM_SETUP_PASSWORD:-osymbiote123!}"
+SETUP_PASSWORD="${OSYM_SETUP_PASSWORD:-osym-setup-$(date +%s)-$$}"
 LOGIN_PASSWORD="${OSYM_LOGIN_PASSWORD:-$SETUP_PASSWORD}"
 PROVIDER_AUTH_HEADER="${OPENROUTER_AUTH_HEADER:-}"
 FAIL=0
