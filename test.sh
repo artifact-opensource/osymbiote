@@ -5,6 +5,7 @@ BASE_URL="${OSYM_BASE_URL:-http://localhost:18422}"
 SETUP_PASSWORD="${OSYM_SETUP_PASSWORD:-osym-setup-$(date +%s)-$$}"
 LOGIN_PASSWORD="${OSYM_LOGIN_PASSWORD:-$SETUP_PASSWORD}"
 PROVIDER_AUTH_HEADER="${OPENROUTER_AUTH_HEADER:-}"
+STRICT_TOOL_CALL_TEST="${STRICT_TOOL_CALL_TEST:-0}"
 FAIL=0
 
 call() {
@@ -84,9 +85,25 @@ if [ -n "$PROVIDER_AUTH_HEADER" ]; then
         -H "Authorization: ${PROVIDER_AUTH_HEADER}" \
         -d "Reply with one short sentence confirming connectivity." \
         "$BASE_URL/ai"
+    echo "=== AI Tool Call (authed) ==="
+    TOOL_RESP="$(curl -fsS --max-time 20 -H "$AUTH_COOKIE" -X POST \
+        -H "Authorization: ${PROVIDER_AUTH_HEADER}" \
+        -H "X-Tool-Call-Test: 1" \
+        -d "Call get_uptime tool and return the tool call." \
+        "$BASE_URL/ai" 2>/dev/null || true)"
+    echo "$TOOL_RESP"
+    if echo "$TOOL_RESP" | grep -q '"tool_calls"'; then
+        echo "Tool call test: PASS"
+    else
+        echo "Tool call test: NO_TOOL_CALLS"
+        if [ "$STRICT_TOOL_CALL_TEST" = "1" ]; then
+            FAIL=1
+        fi
+    fi
+    echo ""
 else
     echo "=== AI (OpenRouter, authed) ==="
-    echo "SKIPPED: set OPENROUTER_AUTH_HEADER to test /ai provider call"
+    echo "SKIPPED: set OPENROUTER_AUTH_HEADER to test /ai provider and tool calls"
     echo ""
 fi
 

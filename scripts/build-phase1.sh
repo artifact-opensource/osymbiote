@@ -279,6 +279,7 @@ CONTENT_LENGTH=0
 AUTH_HEADER=""
 COOKIE_HEADER=""
 SESSION_HEADER=""
+TOOL_CALL_TEST_HEADER=""
 while IFS= read -r header; do
     header=$(echo "$header" | tr -d '\r')
     [ -z "$header" ] && break
@@ -287,6 +288,7 @@ while IFS= read -r header; do
         Authorization:*|authorization:*) AUTH_HEADER="${header#*: }" ;;
         Cookie:*|cookie:*) COOKIE_HEADER="${header#*: }" ;;
         X-Session-Token:*|x-session-token:*) SESSION_HEADER="${header#*: }" ;;
+        X-Tool-Call-Test:*|x-tool-call-test:*) TOOL_CALL_TEST_HEADER="${header#*: }" ;;
     esac
 done
 
@@ -308,7 +310,7 @@ MEM_TOTAL=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
 ARCH=$(uname -m 2>/dev/null || echo unknown)
 AI_PROVIDER="${OSYM_AI_PROVIDER:-openrouter}"
 OPENAI_BASE_URL="${OSYM_OPENAI_BASE_URL:-https://openrouter.ai/api/v1}"
-OPENAI_MODEL="${OSYM_OPENAI_MODEL:-openrouter/free}"
+OPENAI_MODEL="${OSYM_OPENAI_MODEL:-qwen/qwen-2.5-0.5b-instruct}"
 case "$OPENAI_MODEL" in
     openrouter/openrouter/*) OPENAI_MODEL="${OPENAI_MODEL#openrouter/}" ;;
 esac
@@ -722,7 +724,11 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                     RESP='{"error":"send POST with prompt body"}'
                 else
                     PROMPT_ESC="$(json_escape "$BODY")"
-                    PAYLOAD="{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$PROMPT_ESC\"}],\"stream\":false}"
+                    if [ "$TOOL_CALL_TEST_HEADER" = "1" ]; then
+                        PAYLOAD="{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$PROMPT_ESC\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_uptime\",\"description\":\"Read system uptime\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}],\"tool_choice\":\"auto\",\"stream\":false}"
+                    else
+                        PAYLOAD="{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$PROMPT_ESC\"}],\"stream\":false}"
+                    fi
                     AI_RESP=$(wget -qO- -T 20 \
                         --header="Content-Type: application/json" \
                         --header="Authorization: $AUTH_HEADER" \
@@ -871,6 +877,7 @@ BASE_URL="${OSYM_BASE_URL:-http://localhost:18422}"
 SETUP_PASSWORD="${OSYM_SETUP_PASSWORD:-osym-setup-$(date +%s)-$$}"
 LOGIN_PASSWORD="${OSYM_LOGIN_PASSWORD:-$SETUP_PASSWORD}"
 PROVIDER_AUTH_HEADER="${OPENROUTER_AUTH_HEADER:-}"
+STRICT_TOOL_CALL_TEST="${STRICT_TOOL_CALL_TEST:-0}"
 FAIL=0
 
 call() {
@@ -950,9 +957,25 @@ if [ -n "$PROVIDER_AUTH_HEADER" ]; then
         -H "Authorization: ${PROVIDER_AUTH_HEADER}" \
         -d "Reply with one short sentence confirming connectivity." \
         "$BASE_URL/ai"
+    echo "=== AI Tool Call (authed) ==="
+    TOOL_RESP="$(curl -fsS --max-time 20 -H "$AUTH_COOKIE" -X POST \
+        -H "Authorization: ${PROVIDER_AUTH_HEADER}" \
+        -H "X-Tool-Call-Test: 1" \
+        -d "Call get_uptime tool and return the tool call." \
+        "$BASE_URL/ai" 2>/dev/null || true)"
+    echo "$TOOL_RESP"
+    if echo "$TOOL_RESP" | grep -q '"tool_calls"'; then
+        echo "Tool call test: PASS"
+    else
+        echo "Tool call test: NO_TOOL_CALLS"
+        if [ "$STRICT_TOOL_CALL_TEST" = "1" ]; then
+            FAIL=1
+        fi
+    fi
+    echo ""
 else
     echo "=== AI (OpenRouter, authed) ==="
-    echo "SKIPPED: set OPENROUTER_AUTH_HEADER to test /ai provider call"
+    echo "SKIPPED: set OPENROUTER_AUTH_HEADER to test /ai provider and tool calls"
     echo ""
 fi
 

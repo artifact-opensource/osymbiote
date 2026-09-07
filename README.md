@@ -147,10 +147,13 @@ Auth hardening included:
 
 - Provider: `openrouter`
 - Base URL: `https://openrouter.ai/api/v1`
-- Model: `openrouter/free`
+- Model: `qwen/qwen-2.5-0.5b-instruct`
 
 `/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
 Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
+
+To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
+`test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.
 
 ### Architecture-aware intent routing
 
