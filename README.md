@@ -105,25 +105,60 @@ Boots OSymbiote in QEMU with:
 
 ### Access
 
-- **Web UI:** `http://localhost:8422`
-- **API:** `http://localhost:8422/cgi-bin/api?action=status`
+- **Web UI:** `http://localhost:18422/ui`
+- **API:** `http://localhost:18422/health`
 - **Console:** QEMU serial output (stdio)
 
 ---
 
 ## API
 
-The agent exposes a REST API via BusyBox httpd + CGI:
+The agent exposes a REST API on port `8422` (forwarded to host `18422` by default):
 
 | Endpoint | Description |
 |---|---|
-| `/cgi-bin/api?action=status` | System status — uptime, memory, load, hostname, network |
-| `/cgi-bin/api?action=processes` | Process table |
-| `/cgi-bin/api?action=network` | Network interfaces and routing |
-| `/cgi-bin/api?action=memory` | Detailed memory breakdown |
-| `/cgi-bin/api?action=exec&cmd=<command>` | Execute a shell command (agent-mediated) |
+| `/ui` | Minimal HTML setup/login/chat UI |
+| `/setup/status` | First-boot setup status |
+| `/setup/init` (POST password body) | Initialize password (salted hash only) |
+| `/auth/login` (POST password body) | Login and receive short-lived session cookie |
+| `/auth/logout` | Clear session |
+| `/health` | Agent health, setup/auth status, and basic system metrics |
+| `/provider` | Active OpenAI-compatible provider settings |
+| `/hardware` | Hardware manifest |
+| `/chat` (POST body text) | Auth-required local chat response |
+| `/ai` (POST body text) | Auth-required OpenAI-compatible `/chat/completions` proxy |
+| `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
+| `/comb/stage` (POST body text) | Auth-required append memory entry |
+| `/comb/recall` | Auth-required read recent memory entries |
 
 All responses are JSON with CORS headers.
+
+### Setup and auth flow
+
+On a fresh boot, only setup routes are available. Initialize with `POST /setup/init`, then login via `POST /auth/login`.  
+Session auth uses a short-lived cookie (`osym_session`, 15 minutes). Sensitive routes enforce auth.
+
+Auth hardening included:
+- rate limiting on setup/login endpoints
+- temporary lockout/backoff after repeated failed logins
+- password stored as salted SHA-256 hash (never plaintext)
+
+### OpenAI-compatible provider defaults
+
+- Provider: `openrouter`
+- Base URL: `https://openrouter.ai/api/v1`
+- Model: `qwen/qwen-2.5-0.5b-instruct`
+
+`/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
+Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
+
+To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
+`test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.
+
+### Architecture-aware intent routing
+
+`/intent` and `/command` map canonical intents (network, disk usage, process list, memory, uptime) to per-arch command adapters.  
+Current families: `x86_64`, `arm64`, `riscv64`, and `generic` fallback with capability detection.
 
 ---
 
