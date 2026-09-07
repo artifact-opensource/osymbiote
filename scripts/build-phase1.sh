@@ -275,11 +275,13 @@ PATH_REQ=$(echo "$REQUEST_LINE" | cut -d' ' -f2)
 
 # Read headers (consume until empty line)
 CONTENT_LENGTH=0
+AUTH_HEADER=""
 while IFS= read -r header; do
     header=$(echo "$header" | tr -d '\r')
     [ -z "$header" ] && break
     case "$header" in
         Content-Length:*|content-length:*) CONTENT_LENGTH=$(echo "$header" | awk '{print $2}') ;;
+        Authorization:*|authorization:*) AUTH_HEADER="${header#*: }" ;;
     esac
 done
 
@@ -294,10 +296,19 @@ UPTIME=$(cat /proc/uptime 2>/dev/null | cut -d' ' -f1)
 CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
 MEM_FREE=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
 MEM_TOTAL=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+AI_PROVIDER="${OSYM_AI_PROVIDER:-openrouter}"
+OPENAI_BASE_URL="${OSYM_OPENAI_BASE_URL:-https://openrouter.ai/api/v1}"
+OPENAI_MODEL="${OSYM_OPENAI_MODEL:-openrouter/free}"
+case "$OPENAI_MODEL" in
+    openrouter/openrouter/*) OPENAI_MODEL="${OPENAI_MODEL#openrouter/}" ;;
+esac
 
 case "$PATH_REQ" in
     /health|/)
         RESP="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"version\":\"0.1.0-pol\",\"uptime_s\":$UPTIME,\"cores\":$CORES,\"mem_free_kb\":$MEM_FREE,\"mem_total_kb\":$MEM_TOTAL}"
+        ;;
+    /provider)
+        RESP="{\"provider\":\"$AI_PROVIDER\",\"base_url\":\"$OPENAI_BASE_URL\",\"model\":\"$OPENAI_MODEL\",\"protocol\":\"openai-compatible\"}"
         ;;
     /hardware)
         RESP=$(cat /run/hardware.json 2>/dev/null || echo '{"error":"no manifest"}')
@@ -322,8 +333,32 @@ case "$PATH_REQ" in
             RESP='{"error":"send POST with message body"}'
         fi
         ;;
+    /ai)
+        if [ "$METHOD" != "POST" ]; then
+            RESP='{"error":"use POST with raw text body"}'
+        elif [ -z "$AUTH_HEADER" ]; then
+            RESP='{"error":"missing Authorization header","hint":"send provider token in Authorization header"}'
+        elif [ -z "$BODY" ]; then
+            RESP='{"error":"send POST with prompt body"}'
+        else
+            PROMPT_ESC=$(echo "$BODY" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+            PAYLOAD="{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$PROMPT_ESC\"}],\"stream\":false}"
+            AI_RESP=$(wget -qO- -T 20 \
+                --header="Content-Type: application/json" \
+                --header="Authorization: $AUTH_HEADER" \
+                --header="HTTP-Referer: https://osymbiote.local" \
+                --header="X-Title: OSymbiote" \
+                --post-data="$PAYLOAD" \
+                "${OPENAI_BASE_URL%/}/chat/completions" 2>/dev/null || true)
+            if [ -n "$AI_RESP" ]; then
+                RESP="$AI_RESP"
+            else
+                RESP='{"error":"provider_request_failed"}'
+            fi
+        fi
+        ;;
     *)
-        RESP='{"error":"unknown path","routes":["/","/health","/hardware","/comb/recall","/comb/stage","/chat"]}'
+        RESP='{"error":"unknown path","routes":["/","/health","/provider","/hardware","/comb/recall","/comb/stage","/chat","/ai"]}'
         ;;
 esac
 
@@ -447,30 +482,52 @@ chmod +x "$OSYM/boot.sh"
 # Also create a test script
 cat > "$OSYM/test.sh" << 'TESTSCRIPT'
 #!/bin/sh
+set -eu
+
+BASE_URL="${OSYM_BASE_URL:-http://localhost:18422}"
+FAIL=0
+
+call() {
+    NAME="$1"
+    shift
+    echo "=== $NAME ==="
+    if RESP="$(curl -fsS --max-time 8 "$@" 2>/dev/null)"; then
+        echo "$RESP"
+    else
+        echo "ERROR: request failed"
+        FAIL=1
+    fi
+    echo ""
+}
+
 echo "Testing OSymbiote agent..."
 echo ""
 
-echo "=== Health ==="
-curl -s http://localhost:18422/health 2>/dev/null && echo ""
+call "Health" "$BASE_URL/health"
+call "Provider" "$BASE_URL/provider"
+call "Hardware" "$BASE_URL/hardware"
+call "Chat" -X POST -d "Hello, are you alive?" "$BASE_URL/chat"
+call "COMB Stage" -X POST -d "Test memory entry from outside" "$BASE_URL/comb/stage"
+call "COMB Recall" "$BASE_URL/comb/recall"
+
+if [ -n "${OPENROUTER_AUTH_HEADER:-}" ]; then
+    call "AI (OpenRouter)" -X POST \
+        -H "Authorization: ${OPENROUTER_AUTH_HEADER}" \
+        -d "Reply with one short sentence confirming connectivity." \
+        "$BASE_URL/ai"
+else
+    echo "=== AI (OpenRouter) ==="
+    echo "SKIPPED: set OPENROUTER_AUTH_HEADER to test /ai"
+    echo ""
+fi
 
 echo ""
-echo "=== Hardware ==="
-curl -s http://localhost:18422/hardware 2>/dev/null && echo ""
-
-echo ""
-echo "=== Chat ==="
-curl -s -X POST -d "Hello, are you alive?" http://localhost:18422/chat 2>/dev/null && echo ""
-
-echo ""
-echo "=== COMB Stage ==="
-curl -s -X POST -d "Test memory entry from outside" http://localhost:18422/comb/stage 2>/dev/null && echo ""
-
-echo ""
-echo "=== COMB Recall ==="
-curl -s http://localhost:18422/comb/recall 2>/dev/null && echo ""
-
-echo ""
-echo "Done."
+if [ "$FAIL" -eq 0 ]; then
+    echo "Done. All required requests passed."
+else
+    echo "Done. One or more requests failed."
+fi
+exit "$FAIL"
 TESTSCRIPT
 chmod +x "$OSYM/test.sh"
 

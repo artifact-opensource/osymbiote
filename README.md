@@ -106,24 +106,35 @@ Boots OSymbiote in QEMU with:
 ### Access
 
 - **Web UI:** `http://localhost:8422`
-- **API:** `http://localhost:8422/cgi-bin/api?action=status`
+- **API:** `http://localhost:18422/health`
 - **Console:** QEMU serial output (stdio)
 
 ---
 
 ## API
 
-The agent exposes a REST API via BusyBox httpd + CGI:
+The agent exposes a REST API on port `8422` (forwarded to host `18422` by default):
 
 | Endpoint | Description |
 |---|---|
-| `/cgi-bin/api?action=status` | System status — uptime, memory, load, hostname, network |
-| `/cgi-bin/api?action=processes` | Process table |
-| `/cgi-bin/api?action=network` | Network interfaces and routing |
-| `/cgi-bin/api?action=memory` | Detailed memory breakdown |
-| `/cgi-bin/api?action=exec&cmd=<command>` | Execute a shell command (agent-mediated) |
+| `/health` | Agent health and basic system metrics |
+| `/provider` | Active OpenAI-compatible provider settings |
+| `/hardware` | Hardware manifest |
+| `/chat` (POST body text) | Local proof-of-life response |
+| `/ai` (POST body text) | Calls OpenAI-compatible `/chat/completions` provider API |
+| `/comb/stage` (POST body text) | Append memory entry |
+| `/comb/recall` | Read recent memory entries |
 
 All responses are JSON with CORS headers.
+
+### OpenAI-compatible provider defaults
+
+- Provider: `openrouter`
+- Base URL: `https://openrouter.ai/api/v1`
+- Model: `openrouter/free`
+
+`/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
+Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
 
 ---
 
