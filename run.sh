@@ -17,7 +17,16 @@ if [ ! -f "$KERNEL" ] || [ ! -f "$INITRD" ]; then
 fi
 
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    if command -v pkg >/dev/null 2>&1; then
+        echo "Missing qemu-system-x86_64. Installing via Termux pkg..."
+        pkg install -y qemu-system-x86-64 2>/dev/null || true
+    fi
+fi
+
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "Missing qemu-system-x86_64. Install QEMU and retry."
+    echo "  Termux: pkg install qemu-system-x86-64"
+    echo "  Debian/Ubuntu: apt install qemu-system-x86"
     exit 1
 fi
 
@@ -50,12 +59,9 @@ if [ "$1" = "--background" ]; then
         exit 1
     fi
     HEALTH_OK=0
-    for path in "/health" "/cgi-bin/api/health" "/cgi-bin/api?action=status"; do
-        if curl -s --max-time 3 "http://127.0.0.1:${PORT}${path}" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"alive"'; then
-            HEALTH_OK=1
-            break
-        fi
-    done
+    if curl -s --max-time 3 "http://127.0.0.1:${PORT}/health" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"alive"'; then
+        HEALTH_OK=1
+    fi
     if [ "$HEALTH_OK" -eq 1 ]; then
         echo "✅ OSymbiote is ALIVE"
     else

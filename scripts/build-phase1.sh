@@ -446,28 +446,48 @@ cat << 'HTML'
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OSymbiote</title>
   <style>
-    :root{--bg:#0f1115;--panel:#161b22;--panel2:#0d1117;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#7c6aff;--good:#238636;}
+    :root{--bg:#0f1115;--panel:#161b22;--panel2:#0d1117;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#7c6aff;--good:#238636;--bad:#da3633;}
     *{box-sizing:border-box}
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:0}
     .hide{display:none !important}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes fadeSlideIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(35,134,54,.55)}70%{box-shadow:0 0 0 7px rgba(35,134,54,0)}100%{box-shadow:0 0 0 0 rgba(35,134,54,0)}}
+    @keyframes pulseBad{0%{box-shadow:0 0 0 0 rgba(218,54,51,.55)}70%{box-shadow:0 0 0 7px rgba(218,54,51,0)}100%{box-shadow:0 0 0 0 rgba(218,54,51,0)}}
+    @keyframes ringSpin{to{transform:rotate(360deg)}}
+    @keyframes shimmer{0%{background-position:-300px 0}100%{background-position:300px 0}}
+    #bootSplash{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:var(--bg);z-index:100;transition:opacity .4s ease, visibility .4s ease}
+    #bootSplash.fade-out{opacity:0;visibility:hidden;pointer-events:none}
+    .boot-ring{width:56px;height:56px;border-radius:50%;border:3px solid var(--border);border-top-color:var(--accent);animation:ringSpin .9s linear infinite;margin-bottom:16px}
+    .boot-label{color:var(--muted);font-size:13px;letter-spacing:.08em;text-transform:uppercase;animation:fadeIn .6s ease}
+    .boot-brand{font-size:22px;font-weight:700;margin-bottom:18px;animation:fadeIn .5s ease}
+    body>div:not(#bootSplash){animation:fadeIn .35s ease}
     .topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border)}
     .topbar .brand{font-weight:700;letter-spacing:.02em}
-    .topbar .meta{color:var(--muted);font-size:12px}
+    .topbar .meta{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px}
+    .dot{width:9px;height:9px;border-radius:50%;background:var(--good);display:inline-block;animation:pulse 2s infinite}
+    .dot.bad{background:var(--bad);animation:pulseBad 2s infinite}
     .layout{display:flex;min-height:calc(100vh - 45px)}
     nav.tabs{display:flex;flex-direction:column;width:140px;background:var(--panel);border-right:1px solid var(--border);padding:8px}
-    nav.tabs button{all:unset;cursor:pointer;padding:10px 12px;border-radius:6px;color:var(--text);font-size:14px;margin-bottom:4px}
+    nav.tabs button{all:unset;cursor:pointer;padding:10px 12px;border-radius:6px;color:var(--text);font-size:14px;margin-bottom:4px;transition:background .18s ease,transform .12s ease}
     nav.tabs button:hover{background:var(--panel2)}
+    nav.tabs button:active{transform:scale(.97)}
     nav.tabs button.active{background:var(--accent);color:#fff}
     main{flex:1;padding:20px;max-width:900px}
     .panel{display:none}
-    .panel.active{display:block}
-    .box{background:var(--panel);padding:16px;border-radius:10px;margin-bottom:16px}
-    input,textarea,button,select{width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-family:inherit;font-size:14px}
-    button{cursor:pointer;background:var(--good);border:none}
+    .panel.active{display:block;animation:fadeSlideIn .28s ease}
+    .box{background:var(--panel);padding:16px;border-radius:10px;margin-bottom:16px;transition:box-shadow .2s ease}
+    input,textarea,button,select{width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-family:inherit;font-size:14px;transition:border-color .18s ease,box-shadow .18s ease,transform .1s ease}
+    input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,106,255,.22)}
+    button{cursor:pointer;background:var(--good);border:none;transition:filter .15s ease,transform .1s ease}
+    button:hover{filter:brightness(1.1)}
+    button:active{transform:scale(.97)}
     button.secondary{background:var(--panel2);border:1px solid var(--border)}
-    pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);padding:10px;border-radius:6px;max-height:50vh;overflow:auto}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);padding:10px;border-radius:6px;max-height:50vh;overflow:auto;transition:opacity .15s ease}
+    pre.loading{color:transparent;background:linear-gradient(90deg,var(--panel2) 0%,#1c2530 50%,var(--panel2) 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;min-height:40px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px}
+    .stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px;transition:transform .15s ease,border-color .15s ease}
+    .stat:hover{transform:translateY(-2px);border-color:var(--accent)}
     .stat .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
     .stat .value{font-size:20px;font-weight:600;margin-top:4px}
     .row{display:flex;gap:8px}
@@ -478,9 +498,17 @@ cat << 'HTML'
       nav.tabs{flex-direction:row;width:auto;overflow-x:auto}
       .grid{grid-template-columns:1fr}
     }
+    @media (prefers-reduced-motion:reduce){
+      *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+    }
   </style>
 </head>
 <body>
+<div id="bootSplash">
+  <div class="boot-brand">○Symbiote</div>
+  <div class="boot-ring"></div>
+  <div class="boot-label" id="bootLabel">Booting...</div>
+</div>
 <div id="setupBox" class="hide" style="padding:24px">
   <div class="box" style="max-width:480px;margin:40px auto">
     <h2>First Boot Setup</h2>
@@ -500,7 +528,7 @@ cat << 'HTML'
 <div id="appBox" class="hide">
   <div class="topbar">
     <div class="brand">○Symbiote</div>
-    <div class="meta" id="topMeta">—</div>
+    <div class="meta"><span class="dot" id="statusDot"></span><span id="topMeta">—</span></div>
     <button class="secondary" style="width:auto;margin:0" onclick="logout()">Logout</button>
   </div>
   <div class="layout">
@@ -569,11 +597,29 @@ cat << 'HTML'
 </div>
 <script>
 let pollTimer=null;
+let bootHidden=false;
 async function j(url,opt){ const r=await fetch(url,opt||{}); const t=await r.text(); try{return {ok:r.ok,code:r.status,data:JSON.parse(t)};}catch{return {ok:r.ok,code:r.status,data:{raw:t}};} }
+
+function hideBootSplash(){
+  if(bootHidden) return;
+  bootHidden=true;
+  const el=document.getElementById('bootSplash');
+  el.classList.add('fade-out');
+  setTimeout(()=>el.remove(),500);
+}
+
+async function withLoading(el,fn){
+  if(el){ el.classList.add('loading'); el.textContent=''; }
+  try{ await fn(); } finally { if(el) el.classList.remove('loading'); }
+}
 
 function showTab(name){
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
-  document.querySelectorAll('main .panel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+  document.querySelectorAll('main .panel').forEach(p=>{
+    const isActive=p.id==='tab-'+name;
+    p.classList.remove('active');
+    if(isActive){ void p.offsetWidth; p.classList.add('active'); }
+  });
   if(name==='system') refreshSystem();
   if(name==='memory') refreshMemory();
   if(name==='network') refreshNetwork();
@@ -585,23 +631,32 @@ async function refresh(){
   if(!s.data || s.data.needs_setup){
     setupBox.classList.remove('hide'); loginBox.classList.add('hide'); appBox.classList.add('hide');
     stopPolling();
+    hideBootSplash();
     return;
   }
   const h=await j('/health');
   if(h.ok && h.data && h.data.authenticated){
     setupBox.classList.add('hide'); loginBox.classList.add('hide'); appBox.classList.remove('hide');
-    topMeta.textContent='cores:'+h.data.cores+' mem_free:'+h.data.mem_free_kb+'KB uptime:'+Math.floor(h.data.uptime_s)+'s';
+    setStatus(true,h.data);
     startPolling();
+    hideBootSplash();
     return;
   }
   setupBox.classList.add('hide'); loginBox.classList.remove('hide'); appBox.classList.add('hide');
   stopPolling();
+  hideBootSplash();
+}
+
+function setStatus(alive,data){
+  const dot=document.getElementById('statusDot');
+  if(dot) dot.classList.toggle('bad', !alive);
+  if(data) topMeta.textContent='cores:'+data.cores+' mem_free:'+data.mem_free_kb+'KB uptime:'+Math.floor(data.uptime_s)+'s';
 }
 
 function startPolling(){
   if(pollTimer) return;
   pollTimer=setInterval(()=>{
-    j('/health').then(h=>{ if(h.ok && h.data){ topMeta.textContent='cores:'+h.data.cores+' mem_free:'+h.data.mem_free_kb+'KB uptime:'+Math.floor(h.data.uptime_s)+'s'; } });
+    j('/health').then(h=>{ setStatus(!!(h.ok && h.data && h.data.authenticated), h.data); });
     const active=document.querySelector('main .panel.active');
     if(active){
       if(active.id==='tab-system') refreshSystem();
@@ -629,13 +684,17 @@ async function logout(){
 }
 async function sendChat(){
   const q=document.getElementById('prompt').value;
-  const r=await j('/chat',{method:'POST',body:q});
-  chatOut.textContent=JSON.stringify(r.data,null,2);
+  await withLoading(document.getElementById('chatOut'), async()=>{
+    const r=await j('/chat',{method:'POST',body:q});
+    chatOut.textContent=JSON.stringify(r.data,null,2);
+  });
 }
 async function runIntent(){
   const q=document.getElementById('prompt').value;
-  const r=await j('/intent',{method:'POST',body:q});
-  chatOut.textContent=JSON.stringify(r.data,null,2);
+  await withLoading(document.getElementById('chatOut'), async()=>{
+    const r=await j('/intent',{method:'POST',body:q});
+    chatOut.textContent=JSON.stringify(r.data,null,2);
+  });
 }
 async function refreshSystem(){
   const h=await j('/health');
@@ -644,15 +703,21 @@ async function refreshSystem(){
     sysCores.textContent=h.data.cores;
     sysMem.textContent=h.data.mem_free_kb+' / '+h.data.mem_total_kb;
   }
-  const hw=await j('/hardware');
-  sysHw.textContent=JSON.stringify(hw.data,null,2);
-  if(hw.data){ sysArch.textContent=(hw.data.arch||'?')+' / '+(hw.data.hostname||'?'); }
-  const p=await j('/provider');
-  sysProvider.textContent=JSON.stringify(p.data,null,2);
+  await withLoading(document.getElementById('sysHw'), async()=>{
+    const hw=await j('/hardware');
+    sysHw.textContent=JSON.stringify(hw.data,null,2);
+    if(hw.data){ sysArch.textContent=(hw.data.arch||'?')+' / '+(hw.data.hostname||'?'); }
+  });
+  await withLoading(document.getElementById('sysProvider'), async()=>{
+    const p=await j('/provider');
+    sysProvider.textContent=JSON.stringify(p.data,null,2);
+  });
 }
 async function refreshMemory(){
-  const r=await j('/comb/recall');
-  memOut.textContent=JSON.stringify(r.data,null,2);
+  await withLoading(document.getElementById('memOut'), async()=>{
+    const r=await j('/comb/recall');
+    memOut.textContent=JSON.stringify(r.data,null,2);
+  });
 }
 async function stageMemory(){
   const t=document.getElementById('stageText').value;
@@ -662,14 +727,20 @@ async function stageMemory(){
   refreshMemory();
 }
 async function refreshNetwork(){
-  const r=await j('/intent',{method:'POST',body:'show network'});
-  netOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
+  await withLoading(document.getElementById('netOut'), async()=>{
+    const r=await j('/intent',{method:'POST',body:'show network'});
+    netOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
+  });
 }
 async function refreshProcs(){
-  const r=await j('/intent',{method:'POST',body:'process list'});
-  procOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
+  await withLoading(document.getElementById('procOut'), async()=>{
+    const r=await j('/intent',{method:'POST',body:'process list'});
+    procOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
+  });
 }
 refresh();
+// Safety net: never leave the boot splash on-screen indefinitely if a request stalls.
+setTimeout(hideBootSplash,6000);
 </script>
 </body>
 </html>

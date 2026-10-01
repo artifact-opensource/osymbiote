@@ -77,11 +77,27 @@ Power on → BIOS/UEFI → vmlinuz loads
 
 ## Quick Start
 
+OSymbiote boots **inside a QEMU virtual machine**. The host (Linux, WSL2, or Termux on Android) never runs the agent directly — it hosts a VM that boots the agent as PID 1. This is the "boot-in environment": QEMU provides the virtual hardware, and OSymbiote boots into it like real hardware.
+
 ### Prerequisites
 
 - QEMU (`qemu-system-x86_64`)
-- Linux host (or WSL2)
-- Internet connection (for LLM calls in later phases)
+- Linux host, WSL2, or **Termux on Android**
+- Internet connection (for the build step and for LLM calls)
+
+### Termux (Android)
+
+OSymbiote builds and runs fully inside Termux — no root required. The build script detects Termux automatically and installs what it needs via `pkg`:
+
+```bash
+pkg update -y && pkg upgrade -y
+pkg install -y git
+git clone <this-repo-url> osymbiote && cd osymbiote
+bash scripts/build-phase1.sh   # installs qemu-system-x86-64, wget, curl, coreutils, cpio, gzip via pkg
+./run.sh
+```
+
+`run.sh` also detects a missing `qemu-system-x86_64` on Termux and installs it via `pkg` automatically before booting.
 
 ### Build
 
@@ -89,7 +105,7 @@ Power on → BIOS/UEFI → vmlinuz loads
 ./scripts/build-phase1.sh
 ```
 
-This downloads an Alpine Linux kernel + modules, compiles a static BusyBox, assembles the initramfs, and produces a bootable image.
+This downloads an Alpine Linux kernel + modules, fetches a static BusyBox, assembles the initramfs, and produces a bootable image (`build/vmlinuz` + `images/initramfs.cpio.gz`).
 
 ### Run
 
@@ -98,10 +114,11 @@ This downloads an Alpine Linux kernel + modules, compiles a static BusyBox, asse
 ```
 
 Boots OSymbiote in QEMU with:
-- 512MB RAM
-- Virtio + e1000 networking
-- Port forwarding: host 8422 → guest 80 (Web UI)
-- Serial console output
+- 128MB RAM, 2 CPUs (override with `OSYM_RAM` / `OSYM_CPUS`)
+- e1000 networking (DHCP via udhcpc inside the guest)
+- Port forwarding: host `18422` → guest `8422` (override with `OSYM_PORT`)
+- Serial console output (`-nographic`; `Ctrl+A X` to exit QEMU)
+- `./run.sh --background` boots detached and polls `/health` to confirm the agent is alive
 
 ### Access
 
