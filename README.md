@@ -117,7 +117,7 @@ The agent exposes a REST API on port `8422` (forwarded to host `18422` by defaul
 
 | Endpoint | Description |
 |---|---|
-| `/ui` | Minimal HTML setup/login/chat UI |
+| `/ui` | Single-file setup/login UI plus a tabbed dashboard (Chat, System, Memory, Network, Processes) once authenticated |
 | `/setup/status` | First-boot setup status |
 | `/setup/init` (POST password body) | Initialize password (salted hash only) |
 | `/auth/login` (POST password body) | Login and receive short-lived session cookie |

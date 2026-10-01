@@ -301,7 +301,7 @@ fi
 STATUS="200 OK"
 CONTENT_TYPE="application/json"
 EXTRA_HEADERS=""
-RESP="{}"
+RESP=""
 
 UPTIME=$(cat /proc/uptime 2>/dev/null | cut -d' ' -f1)
 CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
@@ -444,48 +444,175 @@ cat << 'HTML'
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>OSymbiote Chat</title>
+  <title>OSymbiote</title>
   <style>
-    body{font-family:system-ui;background:#0f1115;color:#e6edf3;margin:0;padding:24px}
-    .card{max-width:760px;margin:auto;background:#161b22;padding:16px;border-radius:10px}
-    input,textarea,button{width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#e6edf3}
-    button{cursor:pointer;background:#238636;border:none}
-    pre{white-space:pre-wrap;background:#0d1117;padding:10px;border-radius:6px}
-    .hide{display:none}
+    :root{--bg:#0f1115;--panel:#161b22;--panel2:#0d1117;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#7c6aff;--good:#238636;}
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:0}
+    .hide{display:none !important}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border)}
+    .topbar .brand{font-weight:700;letter-spacing:.02em}
+    .topbar .meta{color:var(--muted);font-size:12px}
+    .layout{display:flex;min-height:calc(100vh - 45px)}
+    nav.tabs{display:flex;flex-direction:column;width:140px;background:var(--panel);border-right:1px solid var(--border);padding:8px}
+    nav.tabs button{all:unset;cursor:pointer;padding:10px 12px;border-radius:6px;color:var(--text);font-size:14px;margin-bottom:4px}
+    nav.tabs button:hover{background:var(--panel2)}
+    nav.tabs button.active{background:var(--accent);color:#fff}
+    main{flex:1;padding:20px;max-width:900px}
+    .panel{display:none}
+    .panel.active{display:block}
+    .box{background:var(--panel);padding:16px;border-radius:10px;margin-bottom:16px}
+    input,textarea,button,select{width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-family:inherit;font-size:14px}
+    button{cursor:pointer;background:var(--good);border:none}
+    button.secondary{background:var(--panel2);border:1px solid var(--border)}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);padding:10px;border-radius:6px;max-height:50vh;overflow:auto}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px}
+    .stat .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+    .stat .value{font-size:20px;font-weight:600;margin-top:4px}
+    .row{display:flex;gap:8px}
+    .row>*{flex:1}
+    h2{margin-top:0}
+    @media (max-width:640px){
+      .layout{flex-direction:column}
+      nav.tabs{flex-direction:row;width:auto;overflow-x:auto}
+      .grid{grid-template-columns:1fr}
+    }
   </style>
 </head>
 <body>
-<div class="card">
-  <h2>OSymbiote Web Chat</h2>
-  <div id="setupBox" class="hide">
-    <h3>First Boot Setup</h3>
+<div id="setupBox" class="hide" style="padding:24px">
+  <div class="box" style="max-width:480px;margin:40px auto">
+    <h2>First Boot Setup</h2>
     <input id="setupPw" type="password" placeholder="Create password (min 8 chars)">
     <button onclick="setupInit()">Initialize</button>
     <pre id="setupOut"></pre>
   </div>
-  <div id="loginBox" class="hide">
-    <h3>Login</h3>
+</div>
+<div id="loginBox" class="hide" style="padding:24px">
+  <div class="box" style="max-width:480px;margin:40px auto">
+    <h2>OSymbiote Login</h2>
     <input id="loginPw" type="password" placeholder="Password">
     <button onclick="login()">Login</button>
     <pre id="loginOut"></pre>
   </div>
-  <div id="chatBox" class="hide">
-    <h3>Chat</h3>
-    <textarea id="prompt" rows="3" placeholder="Say something"></textarea>
-    <button onclick="sendChat()">Send Chat</button>
-    <button onclick="runIntent()">Run Intent (network/disk/process/memory/uptime)</button>
-    <pre id="chatOut"></pre>
+</div>
+<div id="appBox" class="hide">
+  <div class="topbar">
+    <div class="brand">○Symbiote</div>
+    <div class="meta" id="topMeta">—</div>
+    <button class="secondary" style="width:auto;margin:0" onclick="logout()">Logout</button>
+  </div>
+  <div class="layout">
+    <nav class="tabs">
+      <button data-tab="chat" class="active" onclick="showTab('chat')">Chat</button>
+      <button data-tab="system" onclick="showTab('system')">System</button>
+      <button data-tab="memory" onclick="showTab('memory')">Memory</button>
+      <button data-tab="network" onclick="showTab('network')">Network</button>
+      <button data-tab="procs" onclick="showTab('procs')">Processes</button>
+    </nav>
+    <main>
+      <section id="tab-chat" class="panel active">
+        <div class="box">
+          <h2>Chat</h2>
+          <textarea id="prompt" rows="3" placeholder="Say something"></textarea>
+          <div class="row">
+            <button onclick="sendChat()">Send Chat</button>
+            <button class="secondary" onclick="runIntent()">Run Intent</button>
+          </div>
+          <div class="meta" style="margin:4px 0 0">Intents: network, disk usage, process list, memory status, uptime</div>
+          <pre id="chatOut"></pre>
+        </div>
+      </section>
+      <section id="tab-system" class="panel">
+        <div class="box">
+          <h2>System</h2>
+          <div class="grid">
+            <div class="stat"><div class="label">Uptime (s)</div><div class="value" id="sysUptime">—</div></div>
+            <div class="stat"><div class="label">Cores</div><div class="value" id="sysCores">—</div></div>
+            <div class="stat"><div class="label">Mem Free / Total (KB)</div><div class="value" id="sysMem">—</div></div>
+            <div class="stat"><div class="label">Arch / Hostname</div><div class="value" id="sysArch">—</div></div>
+          </div>
+          <h3>Hardware Manifest</h3>
+          <pre id="sysHw">loading...</pre>
+          <h3>Provider</h3>
+          <pre id="sysProvider">loading...</pre>
+          <button class="secondary" onclick="refreshSystem()">Refresh</button>
+        </div>
+      </section>
+      <section id="tab-memory" class="panel">
+        <div class="box">
+          <h2>Memory (COMB)</h2>
+          <textarea id="stageText" rows="2" placeholder="Stage a memory entry"></textarea>
+          <button onclick="stageMemory()">Stage</button>
+          <h3>Recent entries</h3>
+          <pre id="memOut">loading...</pre>
+          <button class="secondary" onclick="refreshMemory()">Refresh</button>
+        </div>
+      </section>
+      <section id="tab-network" class="panel">
+        <div class="box">
+          <h2>Network</h2>
+          <pre id="netOut">loading...</pre>
+          <button class="secondary" onclick="refreshNetwork()">Refresh</button>
+        </div>
+      </section>
+      <section id="tab-procs" class="panel">
+        <div class="box">
+          <h2>Processes</h2>
+          <pre id="procOut">loading...</pre>
+          <button class="secondary" onclick="refreshProcs()">Refresh</button>
+        </div>
+      </section>
+    </main>
   </div>
 </div>
 <script>
+let pollTimer=null;
 async function j(url,opt){ const r=await fetch(url,opt||{}); const t=await r.text(); try{return {ok:r.ok,code:r.status,data:JSON.parse(t)};}catch{return {ok:r.ok,code:r.status,data:{raw:t}};} }
+
+function showTab(name){
+  document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('main .panel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+  if(name==='system') refreshSystem();
+  if(name==='memory') refreshMemory();
+  if(name==='network') refreshNetwork();
+  if(name==='procs') refreshProcs();
+}
+
 async function refresh(){
   const s=await j('/setup/status');
-  if(!s.data || s.data.needs_setup){ setupBox.classList.remove('hide'); loginBox.classList.add('hide'); chatBox.classList.add('hide'); return; }
+  if(!s.data || s.data.needs_setup){
+    setupBox.classList.remove('hide'); loginBox.classList.add('hide'); appBox.classList.add('hide');
+    stopPolling();
+    return;
+  }
   const h=await j('/health');
-  if(h.ok && h.data && h.data.authenticated){ setupBox.classList.add('hide'); loginBox.classList.add('hide'); chatBox.classList.remove('hide'); return; }
-  setupBox.classList.add('hide'); loginBox.classList.remove('hide'); chatBox.classList.add('hide');
+  if(h.ok && h.data && h.data.authenticated){
+    setupBox.classList.add('hide'); loginBox.classList.add('hide'); appBox.classList.remove('hide');
+    topMeta.textContent='cores:'+h.data.cores+' mem_free:'+h.data.mem_free_kb+'KB uptime:'+Math.floor(h.data.uptime_s)+'s';
+    startPolling();
+    return;
+  }
+  setupBox.classList.add('hide'); loginBox.classList.remove('hide'); appBox.classList.add('hide');
+  stopPolling();
 }
+
+function startPolling(){
+  if(pollTimer) return;
+  pollTimer=setInterval(()=>{
+    j('/health').then(h=>{ if(h.ok && h.data){ topMeta.textContent='cores:'+h.data.cores+' mem_free:'+h.data.mem_free_kb+'KB uptime:'+Math.floor(h.data.uptime_s)+'s'; } });
+    const active=document.querySelector('main .panel.active');
+    if(active){
+      if(active.id==='tab-system') refreshSystem();
+      if(active.id==='tab-memory') refreshMemory();
+      if(active.id==='tab-network') refreshNetwork();
+      if(active.id==='tab-procs') refreshProcs();
+    }
+  },8000);
+}
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+
 async function setupInit(){
   const pw=document.getElementById('setupPw').value;
   const r=await j('/setup/init',{method:'POST',body:pw});
@@ -496,6 +623,10 @@ async function login(){
   const r=await j('/auth/login',{method:'POST',body:pw});
   loginOut.textContent=JSON.stringify(r.data,null,2); refresh();
 }
+async function logout(){
+  await j('/auth/logout',{method:'POST'});
+  refresh();
+}
 async function sendChat(){
   const q=document.getElementById('prompt').value;
   const r=await j('/chat',{method:'POST',body:q});
@@ -505,6 +636,38 @@ async function runIntent(){
   const q=document.getElementById('prompt').value;
   const r=await j('/intent',{method:'POST',body:q});
   chatOut.textContent=JSON.stringify(r.data,null,2);
+}
+async function refreshSystem(){
+  const h=await j('/health');
+  if(h.ok && h.data){
+    sysUptime.textContent=Math.floor(h.data.uptime_s);
+    sysCores.textContent=h.data.cores;
+    sysMem.textContent=h.data.mem_free_kb+' / '+h.data.mem_total_kb;
+  }
+  const hw=await j('/hardware');
+  sysHw.textContent=JSON.stringify(hw.data,null,2);
+  if(hw.data){ sysArch.textContent=(hw.data.arch||'?')+' / '+(hw.data.hostname||'?'); }
+  const p=await j('/provider');
+  sysProvider.textContent=JSON.stringify(p.data,null,2);
+}
+async function refreshMemory(){
+  const r=await j('/comb/recall');
+  memOut.textContent=JSON.stringify(r.data,null,2);
+}
+async function stageMemory(){
+  const t=document.getElementById('stageText').value;
+  if(!t) return;
+  await j('/comb/stage',{method:'POST',body:t});
+  document.getElementById('stageText').value='';
+  refreshMemory();
+}
+async function refreshNetwork(){
+  const r=await j('/intent',{method:'POST',body:'show network'});
+  netOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
+}
+async function refreshProcs(){
+  const r=await j('/intent',{method:'POST',body:'process list'});
+  procOut.textContent=(r.data && r.data.output) ? r.data.output : JSON.stringify(r.data,null,2);
 }
 refresh();
 </script>
