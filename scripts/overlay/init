@@ -1,0 +1,99 @@
+#!/bin/sh
+# symbiote-init — OSymbiote PID 1: boots, starts the HTTP agent, then opens the shell.
+
+export PATH=/bin:/sbin:/usr/bin
+export HOME=/root TERM="${TERM:-linux}"
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || {
+    mknod /dev/console c 5 1 2>/dev/null
+    mknod /dev/null c 1 3 2>/dev/null
+    mknod /dev/ttyS0 c 4 64 2>/dev/null
+    mknod /dev/zero c 1 5 2>/dev/null
+    mknod /dev/urandom c 1 9 2>/dev/null
+}
+mount -t tmpfs none /tmp
+mount -t tmpfs none /run
+mkdir -p /dev/pts /dev/shm /root
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
+
+# Make sure every busybox applet is registered as a command.
+/bin/busybox --install -s /bin 2>/dev/null || true
+
+clear 2>/dev/null || true
+echo ""
+echo "  ○ S Y M B I O T E  —  booting"
+echo ""
+
+CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_MB=$((MEM_KB / 1024))
+ARCH=$(uname -m 2>/dev/null || echo "unknown")
+HOSTNAME="osymbiote"
+hostname "$HOSTNAME" 2>/dev/null || true
+echo "[init] Hardware: ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}"
+
+echo "[init] Network..."
+ip link set lo up 2>/dev/null
+for iface in eth0 ens0 enp0s3; do
+    if [ -e "/sys/class/net/$iface" ]; then
+        ip link set "$iface" up 2>/dev/null
+        if udhcpc -i "$iface" -s /etc/udhcpc.sh -q -n >/dev/null 2>&1; then
+            IP_ADDR=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+            echo "[init] Network: $iface → $IP_ADDR"
+            break
+        fi
+    fi
+done
+
+echo "[init] COMB Nano: ready"
+mkdir -p /data/comb/staging /data/osymbiote
+/bin/comb stage "OSymbiote booted. ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}" 2>/dev/null || true
+
+cat > /run/hardware.json << HWEOF
+{
+  "hostname": "$HOSTNAME",
+  "arch": "$ARCH",
+  "cores": $CORES,
+  "ram_mb": $MEM_MB,
+  "display": false,
+  "gpu": null,
+  "network": "$(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | grep -v '127\.' | head -1 | cut -d/ -f1)",
+  "boot_time": "$(date -Iseconds 2>/dev/null || date)"
+}
+HWEOF
+
+AGENT_PORT=8422
+HANDLER=/usr/lib/osym/agent_handler.sh
+
+serve_agent() {
+    # tcpsvd forks one handler per connection (parallel browser requests);
+    # fall back to serial busybox nc when tcpsvd is not compiled in.
+    if /bin/busybox --list 2>/dev/null | grep -qx tcpsvd; then
+        tcpsvd -E 0.0.0.0 "$AGENT_PORT" "$HANDLER" 2>/dev/null
+    else
+        nc -l -p "$AGENT_PORT" -e "$HANDLER" 2>/dev/null
+    fi
+    sleep 1
+}
+
+echo "[init] Starting agent on :$AGENT_PORT"
+(while true; do serve_agent; done) &
+
+/bin/comb stage "Boot complete. Agent on :$AGENT_PORT" 2>/dev/null || true
+echo "[init] Agent: http://localhost:8422 (host port forwarded by QEMU)"
+echo "[init] Opening shell. Ctrl+A X exits QEMU."
+sleep 1
+
+# PID 1 keeps the console shell alive.
+while true; do
+    if /bin/busybox --list 2>/dev/null | grep -qx cttyhack; then
+        setsid cttyhack /bin/osh
+    else
+        /bin/osh
+    fi
+    echo "[init] shell exited — respawning"
+    sleep 1
+done

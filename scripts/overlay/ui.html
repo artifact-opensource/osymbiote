@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OSymbiote Portal</title>
+<style>
+:root{--bg:#07070d;--glass:rgba(22,22,38,.62);--glass2:rgba(10,10,20,.55);--border:rgba(160,140,255,.18);--text:#ecebff;--muted:#8d8ba8;--accent:#8b7bff;--accent2:#34d3c1;--good:#2fd37c;--bad:#ff5d6c;--warn:#f5b84b}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--text);background:radial-gradient(1200px 700px at 12% -10%,#2a1a63 0,transparent 60%),radial-gradient(900px 600px at 100% 110%,#0b3b43 0,transparent 55%),var(--bg);background-attachment:fixed;overflow:hidden}
+#bg{position:fixed;inset:0;z-index:0;pointer-events:none}
+.hide{display:none!important}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,211,124,.6)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+@keyframes dots{0%,80%,100%{opacity:.2}40%{opacity:1}}
+#splash{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);transition:opacity .4s,visibility .4s}
+#splash.out{opacity:0;visibility:hidden}
+.ring{width:54px;height:54px;border-radius:50%;border:3px solid var(--border);border-top-color:var(--accent);animation:spin .9s linear infinite;margin-bottom:14px}
+.logo{font-weight:800;letter-spacing:.04em;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.center{position:relative;z-index:1;height:100%;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:var(--glass);border:1px solid var(--border);border-radius:16px;padding:20px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 10px 40px rgba(0,0,0,.4);animation:fade .3s ease}
+.auth{width:100%;max-width:400px}
+.auth h2{margin:0 0 4px;font-size:22px}
+.auth p{margin:0 0 14px;color:var(--muted)}
+input,textarea,select,button{font:inherit;color:var(--text)}
+input,textarea,select{width:100%;padding:10px 12px;margin:5px 0 10px;border-radius:10px;border:1px solid var(--border);background:var(--glass2);transition:border-color .15s,box-shadow .15s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(139,123,255,.22)}
+textarea{resize:vertical}
+label{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+button{cursor:pointer;border:0;padding:10px 16px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6a5cf0);font-weight:600;transition:transform .1s,filter .15s}
+button:hover{filter:brightness(1.12)}button:active{transform:scale(.97)}
+button.sec{background:var(--glass2);border:1px solid var(--border);font-weight:500}
+button.dang{background:linear-gradient(135deg,#ff5d6c,#d63a4a)}
+button.sm{padding:6px 10px;font-size:12px}
+button:disabled{opacity:.5;cursor:wait}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row>.auto{flex:none}
+#app{position:relative;z-index:1;height:100%;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--glass);backdrop-filter:blur(14px)}
+.top .logo{font-size:18px}
+.top .meta{flex:1;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);animation:pulse 2s infinite}.dot.bad{background:var(--bad);animation:none}
+.body{flex:1;display:flex;min-height:0}
+nav{width:176px;flex:none;padding:12px 8px;border-right:1px solid var(--border);background:var(--glass2);overflow:auto}
+nav button{display:block;width:100%;text-align:left;margin-bottom:4px;background:transparent;font-weight:500;color:var(--muted);padding:9px 12px}
+nav button:hover{background:rgba(139,123,255,.12);color:var(--text)}
+nav button.on{background:linear-gradient(135deg,rgba(139,123,255,.35),rgba(52,211,193,.15));color:#fff;box-shadow:inset 0 0 0 1px var(--border)}
+main{flex:1;min-width:0;padding:18px;overflow:auto}
+.pane{display:none;max-width:980px;margin:0 auto;height:100%}.pane.on{display:block;animation:fade .25s ease}
+.pane.chatp.on{display:flex;flex-direction:column}
+h2{margin:0 0 4px;font-size:20px}h3{margin:16px 0 6px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.sub{color:var(--muted);margin:0 0 14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:12px}
+.stat{padding:14px;border-radius:12px;border:1px solid var(--border);background:var(--glass2)}
+.stat .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.07em}.stat .v{font-size:20px;font-weight:700;margin-top:2px;word-break:break-all}
+.bar{height:6px;border-radius:4px;background:rgba(255,255,255,.08);margin-top:8px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .5s}
+pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.35);overflow:auto;max-height:420px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
+#msgs{flex:1;overflow:auto;padding:4px 2px 12px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.msg{max-width:82%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;word-break:break-word;animation:fade .2s ease;border:1px solid var(--border)}
+.msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(139,123,255,.45),rgba(106,92,240,.3))}
+.msg.assistant{align-self:flex-start;background:var(--glass)}
+.msg.err{align-self:center;color:var(--bad);background:rgba(255,93,108,.08)}
+.msg small{display:block;color:var(--muted);font-size:11px;margin-bottom:2px}
+.typing span{display:inline-block;width:6px;height:6px;margin-right:3px;border-radius:50%;background:var(--accent2);animation:dots 1.2s infinite}.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+.compose{display:flex;gap:10px;align-items:flex-end;padding-top:8px}.compose textarea{margin:0;flex:1}.compose button{flex:none}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
+.tag.ok{color:var(--good)}.tag.no{color:var(--bad)}
+.toast{position:fixed;right:18px;bottom:18px;z-index:60;padding:10px 16px;border-radius:10px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(12px);animation:fade .2s}
+.toast.bad{border-color:var(--bad)}
+.item{padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--glass2);margin-bottom:8px;white-space:pre-wrap;word-break:break-word}
+.item small{color:var(--muted)}
+@media(max-width:700px){nav{width:100%;display:flex;overflow:auto;border-right:0;border-bottom:1px solid var(--border);padding:6px}nav button{width:auto;white-space:nowrap;margin:0 4px 0 0}.body{flex-direction:column}}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="splash"><div class="ring"></div><div class="logo" style="font-size:24px">○ SYMBIOTE</div></div>
+
+<div id="setupBox" class="center hide"><div class="card auth">
+  <h2 class="logo">Welcome to OSymbiote</h2><p>First boot: choose a portal password (min 8 characters).</p>
+  <label>Password</label><input id="setupPw" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')setupInit()">
+  <button style="width:100%" onclick="setupInit()">Create password</button><p id="setupOut" style="margin:10px 0 0;color:var(--bad)"></p>
+</div></div>
+
+<div id="loginBox" class="center hide"><div class="card auth">
+  <h2 class="logo">○ OSymbiote</h2><p>Sign in to the agent portal.</p>
+  <label>Password</label><input id="loginPw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+  <button style="width:100%" onclick="login()">Sign in</button><p id="loginOut" style="margin:10px 0 0;color:var(--bad)"></p>
+</div></div>
+
+<div id="app" class="hide">
+  <div class="top"><span class="logo">○ SYMBIOTE</span><span class="meta"><span class="dot" id="dot"></span><span id="topMeta">—</span></span><button class="sec sm" onclick="logout()">Sign out</button></div>
+  <div class="body">
+    <nav id="nav">
+      <button data-t="chat" class="on">💬 Chat</button>
+      <button data-t="history">🕘 History</button>
+      <button data-t="prompt">📝 Prompt</button>
+      <button data-t="llm">🧠 LLM &amp; Provider</button>
+      <button data-t="memory">🗄 Memory</button>
+      <button data-t="system">📊 System</button>
+      <button data-t="network">🌐 Network</button>
+      <button data-t="procs">⚙ Processes</button>
+      <button data-t="account">🔐 Account</button>
+    </nav>
+    <main>
+      <section class="pane chatp on" id="p-chat">
+        <h2>Chat</h2><p class="sub" id="chatSub">Talk to the agent.</p>
+        <div id="msgs"></div>
+        <div class="compose"><textarea id="prompt" rows="2" placeholder="Message the agent… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="sendBtn" onclick="sendChat()">Send</button><button class="sec" onclick="runIntent()" title="Run a system intent: network, disk, process, memory, uptime">Intent</button></div>
+      </section>
+
+      <section class="pane" id="p-history"><div class="card">
+        <div class="row"><div><h2>History</h2><p class="sub">Conversation sent to the LLM as context.</p></div><button class="dang auto sm" onclick="clearHistory()">Clear history</button></div>
+        <div id="histList"></div></div></section>
+
+      <section class="pane" id="p-prompt"><div class="card">
+        <h2>System prompt</h2><p class="sub">Instructions prepended to every chat.</p>
+        <textarea id="sysPrompt" rows="10"></textarea>
+        <div class="row"><button onclick="savePrompt()">Save</button><button class="sec" onclick="resetPrompt()">Reset to default</button></div>
+        <p id="promptState" class="sub"></p></div></section>
+
+      <section class="pane" id="p-llm"><div class="card">
+        <h2>LLM &amp; Provider</h2><p class="sub">Any OpenAI-compatible endpoint. API key <span id="keyState" class="tag"></span></p>
+        <label>Preset</label>
+        <div class="row"><select id="llmPreset"><option value="">— choose —</option><option>openrouter</option><option>openai</option><option>ollama</option><option>lmstudio</option></select><button class="sec auto" onclick="applyPreset()">Apply preset</button></div>
+        <div class="grid"><div><label>Provider</label><input id="f_provider"></div><div><label>Model</label><input id="f_model" list="modelList"><datalist id="modelList"></datalist></div></div>
+        <label>Base URL</label><input id="f_base_url" placeholder="https://openrouter.ai/api/v1">
+        <label>API key <span class="mono" id="keyMask"></span></label><input id="f_api_key" type="password" autocomplete="off" placeholder="leave blank to keep current">
+        <div class="grid"><div><label>Temperature</label><input id="f_temperature"></div><div><label>Max tokens</label><input id="f_max_tokens"></div><div><label>History turns</label><input id="f_history_turns"></div></div>
+        <div class="row"><button onclick="saveLlm()">Save</button><button class="sec" onclick="listModels()">List models</button><button class="sec" onclick="testLlm()">Test connection</button></div>
+        <h3>Result</h3><pre id="llmOut">—</pre></div></section>
+
+      <section class="pane" id="p-memory"><div class="card">
+        <div class="row"><div><h2>Memory (COMB)</h2><p class="sub" id="memStats"></p></div><button class="dang auto sm" onclick="clearMemory()">Clear</button></div>
+        <textarea id="stageText" rows="2" placeholder="Stage a memory entry"></textarea>
+        <button onclick="stageMemory()">Stage</button>
+        <h3>Recent entries</h3><div id="memList"></div></div></section>
+
+      <section class="pane" id="p-system"><div class="card">
+        <h2>System</h2>
+        <div class="grid">
+          <div class="stat"><div class="k">Uptime</div><div class="v" id="sUp">—</div></div>
+          <div class="stat"><div class="k">Cores</div><div class="v" id="sCores">—</div></div>
+          <div class="stat"><div class="k">Memory</div><div class="v" id="sMem">—</div><div class="bar"><i id="sMemBar" style="width:0"></i></div></div>
+          <div class="stat"><div class="k">Arch / Host</div><div class="v" id="sArch">—</div></div>
+        </div>
+        <h3>Disk</h3><pre id="sDisk">…</pre><h3>Hardware manifest</h3><pre id="sHw">…</pre><h3>Provider</h3><pre id="sProv">…</pre></div></section>
+
+      <section class="pane" id="p-network"><div class="card"><div class="row"><h2>Network</h2><button class="sec auto sm" onclick="loadNet()">Refresh</button></div><pre id="netOut">…</pre></div></section>
+      <section class="pane" id="p-procs"><div class="card"><div class="row"><h2>Processes</h2><button class="sec auto sm" onclick="loadProcs()">Refresh</button></div><pre id="procOut">…</pre></div></section>
+
+      <section class="pane" id="p-account"><div class="card">
+        <h2>Account</h2><p class="sub">Sessions expire after 15 minutes. Change the password from the shell with <span class="mono">webpass</span>.</p>
+        <button class="sec" onclick="logout()">Sign out</button></div></section>
+    </main>
+  </div>
+</div>
+<div id="toast" class="toast hide"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let poll=null,tab='chat',chatLoaded=false;
+async function api(url,opt){
+  opt=opt||{};
+  try{const r=await fetch(url,{credentials:'same-origin',...opt});const t=await r.text();let d;try{d=JSON.parse(t)}catch{d={raw:t}}
+    if(r.status===401&&url!=='/auth/login'&&$('app').classList.contains('hide')===false){refresh();}
+    return{ok:r.ok,code:r.status,data:d};}
+  catch(e){return{ok:false,code:0,data:{error:String(e)}}}
+}
+function toast(m,bad){const t=$('toast');t.textContent=m;t.className='toast'+(bad?' bad':'');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.add('hide'),3200)}
+function splashOff(){const s=$('splash');if(s){s.classList.add('out');setTimeout(()=>s.remove(),500)}}
+function show(id){['setupBox','loginBox','app'].forEach(x=>$(x).classList.toggle('hide',x!==id))}
+const fmtUp=s=>{s=Math.floor(s);const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+'d ':'')+(h?h+'h ':'')+m+'m '+(s%60)+'s'};
+const fmtKb=k=>(k/1024).toFixed(0)+' MB';
+
+async function refresh(){
+  const s=await api('/setup/status');
+  if(s.data&&s.data.needs_setup){show('setupBox');stopPoll();splashOff();return}
+  const h=await api('/health');
+  if(h.ok&&h.data.authenticated){show('app');setHealth(h.data);startPoll();onTab(tab,true);splashOff();return}
+  show('loginBox');stopPoll();splashOff();
+}
+function setHealth(d){$('dot').classList.toggle('bad',!d);if(d)$('topMeta').textContent='cores '+d.cores+' · free '+fmtKb(d.mem_free_kb)+' · up '+fmtUp(d.uptime_s)}
+function startPoll(){if(poll)return;poll=setInterval(async()=>{const h=await api('/health');setHealth(h.ok?h.data:null);if(h.ok&&!h.data.authenticated){refresh()}else if(tab==='system')loadSystem()},8000)}
+function stopPoll(){clearInterval(poll);poll=null}
+async function setupInit(){const r=await api('/setup/init',{method:'POST',body:$('setupPw').value});$('setupOut').textContent=r.ok?'':(r.data.error||'failed');if(r.ok){const l=await api('/auth/login',{method:'POST',body:$('setupPw').value});$('setupPw').value=''}refresh()}
+async function login(){const r=await api('/auth/login',{method:'POST',body:$('loginPw').value});$('loginOut').textContent=r.ok?'':(r.data.error==='locked'||r.data.error==='rate_limited'?'Too many attempts — wait '+(r.data.retry_seconds||60)+'s':'Invalid password');$('loginPw').value='';refresh()}
+async function logout(){await api('/auth/logout',{method:'POST'});chatLoaded=false;$('msgs').textContent='';refresh()}
+
+document.getElementById('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(b)onTab(b.dataset.t)});
+function onTab(t,force){
+  tab=t;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t));
+  ({chat:loadChat,history:loadHistory,prompt:loadPrompt,llm:loadLlm,memory:loadMemory,system:loadSystem,network:loadNet,procs:loadProcs}[t]||(()=>{}))();
+}
+function addMsg(role,text,ts){const d=document.createElement('div');d.className='msg '+role;if(ts){const s=document.createElement('small');s.textContent=ts;d.appendChild(s)}d.appendChild(document.createTextNode(text));$('msgs').appendChild(d);$('msgs').scrollTop=1e9;return d}
+
+async function loadChat(){
+  const l=await api('/llm');if(l.ok)$('chatSub').textContent=l.data.api_key_set?'Model: '+l.data.model+' via '+l.data.provider:'No API key yet — open “LLM & Provider” to configure.';
+  if(chatLoaded)return;chatLoaded=true;$('msgs').textContent='';
+  const h=await api('/history?limit=40');
+  if(h.ok&&Array.isArray(h.data))h.data.forEach(m=>addMsg(m.role,m.content));
+  if(!$('msgs').children.length)addMsg('assistant','Hello. I am OSymbiote — the agent that is this operating system. Ask me anything, or press “Intent” to run a system query (network, disk, process, memory, uptime).');
+}
+async function sendChat(){
+  const q=$('prompt').value.trim();if(!q)return;$('prompt').value='';addMsg('user',q);
+  const t=addMsg('assistant','');t.classList.add('typing');t.innerHTML='<span></span><span></span><span></span>';$('sendBtn').disabled=true;
+  const r=await api('/chat',{method:'POST',body:q});$('sendBtn').disabled=false;t.remove();
+  if(r.ok)addMsg('assistant',r.data.response||JSON.stringify(r.data));else addMsg('err','Error: '+(r.data.error||r.code));
+  loadChatSub();
+}
+async function loadChatSub(){const l=await api('/llm');if(l.ok)$('chatSub').textContent=l.data.api_key_set?'Model: '+l.data.model+' via '+l.data.provider:'No API key yet — open “LLM & Provider” to configure.'}
+async function runIntent(){
+  const q=$('prompt').value.trim();if(!q){toast('Type an intent first, e.g. “disk usage”',true);return}
+  $('prompt').value='';addMsg('user','/intent '+q);const r=await api('/intent',{method:'POST',body:q});
+  addMsg(r.ok?'assistant':'err',r.ok?r.data.output:(r.data.error||'failed'));
+}
+$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
+
+async function loadHistory(){
+  const r=await api('/history?limit=200'),box=$('histList');box.textContent='';
+  if(!r.ok||!r.data.length){box.innerHTML='<p class="sub">No history yet.</p>';return}
+  r.data.slice().reverse().forEach(m=>{const d=document.createElement('div');d.className='item';const s=document.createElement('small');s.textContent=m.role+' · '+(m.ts||'');d.appendChild(s);d.appendChild(document.createElement('br'));d.appendChild(document.createTextNode(m.content));box.appendChild(d)});
+}
+async function clearHistory(){if(!confirm('Clear all conversation history?'))return;await api('/history',{method:'DELETE'});chatLoaded=false;toast('History cleared');loadHistory()}
+
+async function loadPrompt(){const r=await api('/prompt');if(r.ok){$('sysPrompt').value=r.data.prompt;$('promptState').textContent=r.data.default?'Using the default prompt.':'Custom prompt active.'}}
+async function savePrompt(){const r=await api('/prompt',{method:'POST',body:$('sysPrompt').value});toast(r.ok?'Prompt saved':'Save failed',!r.ok);loadPrompt()}
+async function resetPrompt(){await api('/prompt',{method:'DELETE'});toast('Prompt reset');loadPrompt()}
+
+const LLM_KEYS=['provider','model','base_url','temperature','max_tokens','history_turns'];
+async function loadLlm(){
+  const r=await api('/llm');if(!r.ok)return;const d=r.data;
+  LLM_KEYS.forEach(k=>{$('f_'+k).value=d[k]});$('f_api_key').value='';
+  $('keyState').textContent=d.api_key_set?'configured':'not set';$('keyState').className='tag '+(d.api_key_set?'ok':'no');$('keyMask').textContent=d.api_key_masked?'('+d.api_key_masked+')':'';
+}
+async function saveLlm(){
+  let b=LLM_KEYS.map(k=>k+'='+$('f_'+k).value.trim()).join('\n');const key=$('f_api_key').value.trim();if(key)b+='\napi_key='+key;
+  const r=await api('/llm',{method:'POST',body:b});
+  if(r.ok){toast('LLM settings saved');loadLlm()}else{toast('Rejected: '+(r.data.detail||r.data.error),true)}
+}
+async function applyPreset(){const p=$('llmPreset').value;if(!p)return;const r=await api('/llm',{method:'POST',body:'preset='+p});toast(r.ok?'Preset applied':'Preset failed',!r.ok);loadLlm()}
+async function testLlm(){$('llmOut').textContent='Testing…';const r=await api('/llm/test',{method:'POST',body:''});$('llmOut').textContent=r.ok?'OK: '+r.data.reply:'FAILED: '+(r.data.error||r.code);loadLlm()}
+async function listModels(){
+  $('llmOut').textContent='Fetching models…';const r=await api('/llm/models');
+  if(r.ok&&r.data.data){const ids=r.data.data.map(m=>m.id);$('modelList').innerHTML='';ids.slice(0,500).forEach(i=>{const o=document.createElement('option');o.value=i;$('modelList').appendChild(o)});$('llmOut').textContent=ids.length+' models (type in the Model box to pick):\n'+ids.slice(0,200).join('\n')}
+  else $('llmOut').textContent='FAILED: '+JSON.stringify(r.data);
+}
+
+async function loadMemory(){
+  const [r,s]=await Promise.all([api('/memory?limit=50'),api('/memory/stats')]);
+  if(s.ok)$('memStats').textContent=s.data.entries+' entries in '+s.data.files+' file(s) · stored in RAM only';
+  const box=$('memList');box.textContent='';
+  if(!r.ok||!r.data.length){box.innerHTML='<p class="sub">No entries.</p>';return}
+  r.data.slice().reverse().forEach(m=>{const d=document.createElement('div');d.className='item';const s=document.createElement('small');s.textContent=m.ts;d.appendChild(s);d.appendChild(document.createElement('br'));d.appendChild(document.createTextNode(m.text));box.appendChild(d)});
+}
+async function stageMemory(){const t=$('stageText').value.trim();if(!t)return;await api('/memory',{method:'POST',body:t});$('stageText').value='';toast('Staged');loadMemory()}
+async function clearMemory(){if(!confirm('Clear all memory entries?'))return;await api('/memory',{method:'DELETE'});loadMemory()}
+
+async function loadSystem(){
+  const h=await api('/health');
+  if(h.ok){const d=h.data;$('sUp').textContent=fmtUp(d.uptime_s);$('sCores').textContent=d.cores;const used=d.mem_total_kb-d.mem_free_kb;$('sMem').textContent=fmtKb(used)+' / '+fmtKb(d.mem_total_kb);$('sMemBar').style.width=Math.min(100,used*100/Math.max(1,d.mem_total_kb))+'%'}
+  const hw=await api('/hardware');$('sHw').textContent=JSON.stringify(hw.data,null,2);if(hw.data)$('sArch').textContent=(hw.data.arch||'?')+' / '+(hw.data.hostname||'?');
+  $('sProv').textContent=JSON.stringify((await api('/provider')).data,null,2);
+  const d=await api('/system/disk');$('sDisk').textContent=d.data.output||JSON.stringify(d.data);
+}
+async function loadNet(){const r=await api('/system/network');$('netOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}
+async function loadProcs(){const r=await api('/system/processes');$('procOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}
+
+// animated particle network background
+(function(){
+  const c=$('bg'),x=c.getContext('2d');let w,h,P=[];
+  function size(){w=c.width=innerWidth;h=c.height=innerHeight;P=Array.from({length:Math.min(70,Math.floor(w*h/22000))},()=>({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.35,vy:(Math.random()-.5)*.35}))}
+  function step(){x.clearRect(0,0,w,h);
+    for(const p of P){p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>w)p.vx*=-1;if(p.y<0||p.y>h)p.vy*=-1;x.fillStyle='rgba(139,123,255,.7)';x.beginPath();x.arc(p.x,p.y,1.6,0,6.3);x.fill()}
+    for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.hypot(dx,dy);if(d<130){x.strokeStyle='rgba(52,211,193,'+(.16*(1-d/130))+')';x.beginPath();x.moveTo(P[i].x,P[i].y);x.lineTo(P[j].x,P[j].y);x.stroke()}}
+    requestAnimationFrame(step)}
+  addEventListener('resize',size);size();
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches)step();
+})();
+refresh();setTimeout(splashOff,6000);
+</script>
+</body>
+</html>

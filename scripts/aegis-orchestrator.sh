@@ -140,8 +140,8 @@ boot() {
 verify_agent() {
     log "Verifying OSymbiote agent..."
     
-    # The QEMU has port forwarding: host:18422 → guest:8422
-    local RESPONSE=$($AEGIS_SSH "curl -s --connect-timeout 5 http://localhost:18422/" 2>/dev/null || echo "TIMEOUT")
+    # The QEMU has port forwarding: host:8422 → guest:8422
+    local RESPONSE=$($AEGIS_SSH "curl -s --connect-timeout 5 http://localhost:8422/" 2>/dev/null || echo "TIMEOUT")
     
     if echo "$RESPONSE" | grep -q "alive"; then
         ok "OSymbiote agent is ALIVE!"

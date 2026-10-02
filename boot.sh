@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Booting OSymbiote..."
 echo "  Kernel:    $DIR/build/vmlinuz"
 echo "  Initramfs: $DIR/images/initramfs.cpio.gz"
-echo "  RAM: 128MB, Port forward: host:18422 → guest:8422"
+echo "  RAM: 128MB, Port forward: host:8422 → guest:8422"
 echo ""
 
 qemu-system-x86_64 \
@@ -15,7 +15,7 @@ qemu-system-x86_64 \
     -append "console=ttyS0 quiet panic=10" \
     -nographic \
     -no-reboot \
-    -netdev user,id=net0,hostfwd=tcp::18422-:8422 \
+    -netdev user,id=net0,hostfwd=tcp::8422-:8422 \
     -device e1000,netdev=net0 \
     -smp 2 \
     -cpu max
