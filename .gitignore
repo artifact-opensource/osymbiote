@@ -18,3 +18,5 @@ images/initramfs.cpio.gz
 *.swp
 *.swo
 *~
+build/initrd/
+build/initramfs-virt

@@ -46,8 +46,9 @@ No systemd, no cron, no login manager — true today, same as the original claim
 - **Boots to agent in a few seconds** on QEMU (x86_64)
 - **BusyBox userland** — ~40 coreutils symlinks, a custom `comb` memory script, a shell
 - **Networking** — DHCP via udhcpc on `eth0`/`ens0`/`enp0s3`
-- **Web UI** — single-file HTML/CSS/JS dashboard served at `/ui` (see API section)
-- **HTTP API** — a hand-rolled request handler built on BusyBox `nc`, not a real web server — it serves one request at a time, no concurrency
+- **Boot shell (`osh`)** — the console drops into an interactive shell on boot (`help`, `status`, `chat`, `ask`, `llm …`, `prompt`, `history`, `memory`, `net`, `webpass`, `agent`, `doctor`); any other command runs as a normal BusyBox command. The agent LLM is configured from the shell with `llm preset|set|key|url|model|models|test`.
+- **Web portal** — single-file HTML/CSS/JS portal at `http://localhost:8422/ui` with Chat, History, Prompt, LLM & Provider, Memory, System, Network, Processes and Account panes
+- **HTTP API** — a hand-rolled shell request handler, served per-connection by BusyBox `tcpsvd` (falls back to single-connection `nc -e` if `tcpsvd` is unavailable); not a real web server
 - **Agent loop** — `/init` (PID 1) does hardware probing, network bring-up, then supervises the HTTP handler, restarting it if it exits
 - **~1MB initramfs** — the whole image is close to a megabyte
 
@@ -60,8 +61,8 @@ Power on → BIOS/UEFI → vmlinuz loads
       → mount proc, sys, dev, tmp, run
       → bring up loopback + DHCP on the first available NIC
       → write /run/hardware.json
-      → start the nc-based HTTP handler loop
-      → supervisor loop: restart the handler if it dies
+      → start the HTTP agent on :8422 (restarted automatically if it dies)
+      → open the osh shell on the console (respawned on exit)
 ```
 
 ### Known limitations (read before relying on this)
@@ -115,21 +116,21 @@ This downloads an Alpine Linux kernel + modules, fetches a static BusyBox, assem
 Boots OSymbiote in QEMU with:
 - 128MB RAM, 2 CPUs (override with `OSYM_RAM` / `OSYM_CPUS`)
 - e1000 networking (DHCP via udhcpc inside the guest)
-- Port forwarding: host `18422` → guest `8422` (override with `OSYM_PORT`)
+- Port forwarding: host `8422` → guest `8422` (override with `OSYM_PORT`)
 - Serial console output (`-nographic`; `Ctrl+A X` to exit QEMU)
 - `./run.sh --background` boots detached and polls `/health` to confirm the agent is alive
 
 ### Access
 
-- **Web UI:** `http://localhost:18422/ui`
-- **API:** `http://localhost:18422/health`
+- **Web UI:** `http://localhost:8422/ui`
+- **API:** `http://localhost:8422/health`
 - **Console:** QEMU serial output (stdio)
 
 ---
 
 ## API
 
-The agent exposes a REST API on port `8422` (forwarded to host `18422` by default):
+The agent exposes a REST API on port `8422` (forwarded to host `8422` by default):
 
 | Endpoint | Description |
 |---|---|
@@ -141,11 +142,18 @@ The agent exposes a REST API on port `8422` (forwarded to host `18422` by defaul
 | `/health` | Agent health, setup/auth status, and basic system metrics |
 | `/provider` | Active OpenAI-compatible provider settings |
 | `/hardware` | Hardware manifest |
-| `/chat` (POST body text) | Auth-required local chat response |
+| `/chat` (POST body text) | Auth-required chat with the configured LLM (history-aware); echo fallback when no API key is set |
+| `/llm` (GET / POST `key=value` lines) | Auth-required LLM config: `provider`, `base_url`, `model`, `api_key`, `temperature`, `max_tokens`, `history_turns`, `preset` |
+| `/llm/test` (POST), `/llm/models` | Auth-required provider connectivity test / model list |
+| `/prompt` (GET / POST text / DELETE) | Auth-required system prompt |
+| `/history` (GET `?limit=N` / DELETE) | Auth-required conversation history |
+| `/memory` (GET `?limit=N` / POST text / DELETE), `/memory/stats` | Auth-required COMB memory (aliases of `/comb/*`) |
+| `/system/network`, `/system/processes`, `/system/disk`, `/system/memory` | Auth-required system views |
 | `/ai` (POST body text) | Auth-required OpenAI-compatible `/chat/completions` proxy |
 | `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
 | `/comb/stage` (POST body text) | Auth-required append memory entry |
 | `/comb/recall` | Auth-required read recent memory entries |
+| `/exec` (POST shell command body) | Auth-required root shell execution (30s timeout) |
 
 All responses are JSON with CORS headers.
 
@@ -161,12 +169,14 @@ Auth hardening included:
 
 ### OpenAI-compatible provider defaults
 
+NIC drivers (`e1000`, `virtio_net`, `af_packet`) are pulled from Alpine's `initramfs-virt` at build time and loaded by init, since the Alpine virt kernel ships them as modules. The agent uses `nc -lk` so the portal's parallel requests are served concurrently.
+
 - Provider: `openrouter`
 - Base URL: `https://openrouter.ai/api/v1`
-- Model: `qwen/qwen-2.5-0.5b-instruct`
+- Model: `openrouter/free`
 
 `/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
-Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
+Set the API key via the portal (LLM & Provider), `POST /llm` with `api_key=...`, or `llm key <key>` in the shell; `/ai` also accepts an `Authorization` header override.
 
 To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
 `test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.
@@ -203,15 +213,15 @@ osymbiote/
 ├── boot.sh                   # Generated snapshot of build-phase1.sh's boot helper
 ├── test.sh                   # Generated snapshot of build-phase1.sh's smoke test
 ├── scripts/
-│   ├── build-phase1.sh       # The single source of truth: generates /init, the HTTP
-│   │                         #   handler, the UI, and the comb script, then builds the
-│   │                         #   initramfs + downloads the kernel
+│   ├── build-phase1.sh       # Downloads kernel + busybox and builds the initramfs
+│   ├── overlay/              # Files installed into the initramfs: init, osh (shell),
+│   │                         #   agent_handler.sh, lib.sh, ui.html, comb, udhcpc.sh
 │   └── aegis-orchestrator.sh # Personal deployment tooling (hardcoded host/path, not portable)
 ├── build/                    # Build output (gitignored): assembled initramfs tree
 └── images/                   # Built kernel + initramfs images (gitignored)
 ```
 
-There is no `www/` directory and no `cgi-bin` — the UI, the HTTP route handler, and the `comb` memory tool are all generated inline as heredocs inside `scripts/build-phase1.sh` and written into the initramfs at build time.
+There is no `www/` directory and no `cgi-bin` — the UI, HTTP route handler, shell and `comb` memory tool live in `scripts/overlay/` and are copied into the initramfs by `scripts/build-phase1.sh`. `boot.sh` and `test.sh` are still generated by the build script.
 
 ---
 

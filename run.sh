@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 KERNEL="build/vmlinuz"
 INITRD="images/initramfs.cpio.gz"
-PORT="${OSYM_PORT:-18422}"
+PORT="${OSYM_PORT:-8422}"
 RAM="${OSYM_RAM:-128}"
 CPUS="${OSYM_CPUS:-2}"
 
@@ -32,7 +32,7 @@ fi
 
 echo "┌──────────────────────────────────┐"
 echo "│  OSymbiote — Starting...         │"
-echo "│  API: http://localhost:$PORT      │"
+echo "│  API: http://localhost:$PORT       │"
 echo "│  RAM: ${RAM}MB, CPUs: $CPUS       │"
 echo "└──────────────────────────────────┘"
 
