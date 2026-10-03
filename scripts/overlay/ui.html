@@ -102,6 +102,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
       <button data-t="system">📊 System</button>
       <button data-t="network">🌐 Network</button>
       <button data-t="procs">⚙ Processes</button>
+      <button data-t="shell">💻 Shell</button>
       <button data-t="account">🔐 Account</button>
     </nav>
     <main>
@@ -152,6 +153,11 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
       <section class="pane" id="p-network"><div class="card"><div class="row"><h2>Network</h2><button class="sec auto sm" onclick="loadNet()">Refresh</button></div><pre id="netOut">…</pre></div></section>
       <section class="pane" id="p-procs"><div class="card"><div class="row"><h2>Processes</h2><button class="sec auto sm" onclick="loadProcs()">Refresh</button></div><pre id="procOut">…</pre></div></section>
 
+      <section class="pane" id="p-shell"><div class="card">
+        <h2>Shell</h2><p class="sub">Runs a command as root in the OS (30s timeout).</p>
+        <pre id="shOut" style="min-height:200px">$ </pre>
+        <div class="compose"><input id="shIn" class="mono" placeholder="uname -a" style="margin:0"><button onclick="runShell()">Run</button></div></div></section>
+
       <section class="pane" id="p-account"><div class="card">
         <h2>Account</h2><p class="sub">Sessions expire after 15 minutes. Change the password from the shell with <span class="mono">webpass</span>.</p>
         <button class="sec" onclick="logout()">Sign out</button></div></section>
@@ -194,7 +200,7 @@ document.getElementById('nav').addEventListener('click',e=>{const b=e.target.clo
 function onTab(t,force){
   tab=t;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
   document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t));
-  ({chat:loadChat,history:loadHistory,prompt:loadPrompt,llm:loadLlm,memory:loadMemory,system:loadSystem,network:loadNet,procs:loadProcs}[t]||(()=>{}))();
+  ({chat:loadChat,history:loadHistory,prompt:loadPrompt,llm:loadLlm,memory:loadMemory,system:loadSystem,shell:()=>$('shIn').focus(),network:loadNet,procs:loadProcs}[t]||(()=>{}))();
 }
 function addMsg(role,text,ts){const d=document.createElement('div');d.className='msg '+role;if(ts){const s=document.createElement('small');s.textContent=ts;d.appendChild(s)}d.appendChild(document.createTextNode(text));$('msgs').appendChild(d);$('msgs').scrollTop=1e9;return d}
 
@@ -267,6 +273,8 @@ async function loadSystem(){
   $('sProv').textContent=JSON.stringify((await api('/provider')).data,null,2);
   const d=await api('/system/disk');$('sDisk').textContent=d.data.output||JSON.stringify(d.data);
 }
+async function runShell(){const c=$('shIn').value.trim();if(!c)return;$('shIn').value='';const o=$('shOut');o.textContent+=c+'\n';const r=await api('/exec',{method:'POST',body:c});o.textContent+=(r.ok?r.data.output:'error: '+(r.data.error||r.code))+'\n$ ';o.scrollTop=1e9}
+$('shIn').addEventListener('keydown',e=>{if(e.key==='Enter')runShell()});
 async function loadNet(){const r=await api('/system/network');$('netOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}
 async function loadProcs(){const r=await api('/system/processes');$('procOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}
 

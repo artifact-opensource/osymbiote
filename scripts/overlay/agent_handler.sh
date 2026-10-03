@@ -425,6 +425,16 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                 fi
             fi
             ;;
+        /exec)
+            if enforce_auth && need_post; then
+                if [ -z "$BODY" ]; then
+                    STATUS="400 Bad Request"; RESP='{"error":"missing_command"}'
+                else
+                    EXEC_OUT="$(timeout 30 sh -c "$BODY" 2>&1 | head -c 32768)"
+                    RESP="{\"command\":\"$(json_escape "$BODY")\",\"output\":\"$(json_escape "$EXEC_OUT")\"}"
+                fi
+            fi
+            ;;
         /system/network|/system/processes|/system/disk|/system/memory)
             if enforce_auth; then
                 case "$PATH_ONLY" in
@@ -438,7 +448,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             ;;
         *)
             STATUS="404 Not Found"
-            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/system/network","/system/processes","/system/disk","/system/memory"]}'
+            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/system/network","/system/processes","/system/disk","/system/memory"]}'
             ;;
     esac
 fi

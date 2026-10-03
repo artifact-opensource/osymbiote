@@ -153,6 +153,7 @@ The agent exposes a REST API on port `8422` (forwarded to host `8422` by default
 | `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
 | `/comb/stage` (POST body text) | Auth-required append memory entry |
 | `/comb/recall` | Auth-required read recent memory entries |
+| `/exec` (POST shell command body) | Auth-required root shell execution (30s timeout) |
 
 All responses are JSON with CORS headers.
 
@@ -168,12 +169,14 @@ Auth hardening included:
 
 ### OpenAI-compatible provider defaults
 
+NIC drivers (`e1000`, `virtio_net`, `af_packet`) are pulled from Alpine's `initramfs-virt` at build time and loaded by init, since the Alpine virt kernel ships them as modules. The agent uses `nc -lk` so the portal's parallel requests are served concurrently.
+
 - Provider: `openrouter`
 - Base URL: `https://openrouter.ai/api/v1`
-- Model: `qwen/qwen-2.5-0.5b-instruct`
+- Model: `openrouter/free`
 
 `/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
-Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
+Set the API key via the portal (LLM & Provider), `POST /llm` with `api_key=...`, or `llm key <key>` in the shell; `/ai` also accepts an `Authorization` header override.
 
 To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
 `test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.

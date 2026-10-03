@@ -181,6 +181,24 @@ cd "$INITRD/dev"
 # Note: mknod may fail in Termux (no root), QEMU devtmpfs handles it
 cd "$OSYM"
 
+# ── NIC drivers (modules in the Alpine virt kernel; needed for networking) ──
+if [ ! -f "$BUILD/initramfs-virt" ]; then
+    wget -q -O "$BUILD/initramfs-virt" \
+        "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/initramfs-virt" || \
+        { echo "  ERROR: Cannot download Alpine initramfs (NIC modules)."; exit 1; }
+fi
+MODTMP="$(mktemp -d)"
+(cd "$MODTMP" && zcat "$BUILD/initramfs-virt" | cpio -id --quiet \
+    'lib/modules/*/kernel/drivers/net/ethernet/intel/e1000/*' \
+    'lib/modules/*/kernel/drivers/net/virtio_net.ko*' \
+    'lib/modules/*/kernel/drivers/net/net_failover.ko*' \
+    'lib/modules/*/kernel/net/core/failover.ko*' \
+    'lib/modules/*/kernel/net/packet/af_packet.ko*' 2>/dev/null) || true
+mkdir -p "$INITRD/lib/modules"
+find "$MODTMP/lib/modules" -name '*.ko*' -exec cp {} "$INITRD/lib/modules/" \; 2>/dev/null || true
+rm -rf "$MODTMP"
+echo "  NIC modules: $(ls "$INITRD/lib/modules" | tr '\n' ' ')"
+
 # ── Install OS overlay (init, shell, agent, UI, libs) ──
 OVERLAY="$SCRIPT_DIR/overlay"
 mkdir -p "$INITRD/usr/lib/osym" "$INITRD/usr/share/osym" "$INITRD/root"

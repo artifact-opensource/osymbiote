@@ -36,16 +36,30 @@ hostname "$HOSTNAME" 2>/dev/null || true
 echo "[init] Hardware: ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}"
 
 echo "[init] Network..."
+# NIC drivers ship as modules; dependency order matters.
+for m in af_packet failover net_failover virtio_net e1000; do
+    for f in /lib/modules/$m.ko /lib/modules/$m.ko.gz; do
+        [ -f "$f" ] && { insmod "$f" 2>/dev/null; break; }
+    done
+done
+sleep 1
 ip link set lo up 2>/dev/null
 for iface in eth0 ens0 enp0s3; do
-    if [ -e "/sys/class/net/$iface" ]; then
-        ip link set "$iface" up 2>/dev/null
-        if udhcpc -i "$iface" -s /etc/udhcpc.sh -q -n >/dev/null 2>&1; then
-            IP_ADDR=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+    [ -e "/sys/class/net/$iface" ] || continue
+    ip link set "$iface" up 2>/dev/null
+    # wait for link (up to ~10s), then DHCP with retries
+    n=0
+    while [ "$n" -lt 10 ] && [ "$(cat /sys/class/net/$iface/carrier 2>/dev/null)" != "1" ]; do sleep 1; n=$((n + 1)); done
+    t=0
+    while [ "$t" -lt 4 ]; do
+        udhcpc -i "$iface" -s /etc/udhcpc.sh -q -n >/dev/null 2>&1
+        IP_ADDR=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+        if [ -n "$IP_ADDR" ]; then
             echo "[init] Network: $iface → $IP_ADDR"
-            break
+            break 2
         fi
-    fi
+        t=$((t + 1)); sleep 1
+    done
 done
 
 echo "[init] COMB Nano: ready"
@@ -69,12 +83,15 @@ AGENT_PORT=8422
 HANDLER=/usr/lib/osym/agent_handler.sh
 
 serve_agent() {
-    # tcpsvd forks one handler per connection (parallel browser requests);
-    # fall back to serial busybox nc when tcpsvd is not compiled in.
+    # busybox "nc -lk" forks a handler per connection (browsers open several at once);
+    # fall back to tcpsvd, then to serial single-shot "nc -l -e".
     if /bin/busybox --list 2>/dev/null | grep -qx tcpsvd; then
         tcpsvd -E 0.0.0.0 "$AGENT_PORT" "$HANDLER" 2>/dev/null
+    elif nc --help 2>&1 | grep -q -- '-lk'; then
+        nc -lk -p "$AGENT_PORT" -e "$HANDLER" 2>/dev/null
     else
         nc -l -p "$AGENT_PORT" -e "$HANDLER" 2>/dev/null
+        return
     fi
     sleep 1
 }

@@ -35,7 +35,7 @@ cfg_key_valid() {
 provider_default() {
     case "$1" in
         base_url) printf '%s' "${OSYM_OPENAI_BASE_URL:-https://openrouter.ai/api/v1}" ;;
-        model) printf '%s' "${OSYM_OPENAI_MODEL:-qwen/qwen-2.5-0.5b-instruct}" ;;
+        model) printf '%s' "${OSYM_OPENAI_MODEL:-openrouter/free}" ;;
         provider) printf '%s' "${OSYM_AI_PROVIDER:-openrouter}" ;;
         temperature) printf '0.7' ;;
         max_tokens) printf '512' ;;
