@@ -21,7 +21,7 @@ mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
 
 mkdir -p /data
 OSYM_DATA_PERSISTENT=0
-for m in virtio_ring virtio virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci 9pnet 9pnet_virtio 9p; do
+for m in virtio_ring virtio virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci netfs 9pnet 9pnet_virtio 9p; do
     for f in /lib/modules/$m.ko /lib/modules/$m.ko.gz; do
         [ -f "$f" ] && { /bin/busybox insmod "$f" 2>/dev/null; break; }
     done

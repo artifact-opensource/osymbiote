@@ -44,14 +44,14 @@ download_file() {
 echo "[1/6] Installing packages..."
 if command -v pkg >/dev/null 2>&1; then
     pkg upgrade -y 2>/dev/null || true
-    for p in qemu-system-x86-64 wget curl coreutils cpio gzip; do
+    for p in qemu-system-x86-64 wget curl coreutils cpio gzip squashfs-tools; do
         pkg install -y "$p" 2>/dev/null || echo "  $p already installed or unavailable"
     done
 else
     echo "  Non-Termux host detected; skipping pkg install."
 fi
 
-for t in wget cpio gzip; do
+for t in wget cpio gzip unsquashfs; do
     require_tool "$t"
 done
 command -v qemu-system-x86_64 >/dev/null 2>&1 || echo "  WARN: qemu-system-x86_64 not found (build will still complete)."
@@ -78,13 +78,23 @@ download_file "$PAIR_TMP/initramfs-virt" \
     echo "  ERROR: Cannot download Alpine initramfs (NIC modules)."
     exit 1
 }
+download_file "$PAIR_TMP/modloop-virt" \
+    "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/modloop-virt" || {
+    echo "  ERROR: Cannot download matching Alpine module loop."
+    exit 1
+}
 gzip -t "$PAIR_TMP/initramfs-virt" || {
     echo "  ERROR: Downloaded Alpine initramfs is invalid."
     exit 1
 }
+unsquashfs -s "$PAIR_TMP/modloop-virt" >/dev/null 2>&1 || {
+    echo "  ERROR: Downloaded Alpine module loop is invalid."
+    exit 1
+}
 mv "$PAIR_TMP/vmlinuz" "$BUILD/vmlinuz"
 mv "$PAIR_TMP/initramfs-virt" "$BUILD/initramfs-virt"
-echo "  Kernel and module archive refreshed together: $(du -h "$BUILD/vmlinuz" | cut -f1)"
+mv "$PAIR_TMP/modloop-virt" "$BUILD/modloop-virt"
+echo "  Kernel and module archives refreshed together: $(du -h "$BUILD/vmlinuz" | cut -f1)"
 
 # ═══════════════════════════════════════════════
 # Step 3: Get x86_64 static busybox
@@ -191,7 +201,7 @@ cd "$OSYM"
 
 # ── NIC drivers (modules in the freshly downloaded Alpine virt kernel pair) ──
 gzip -t "$BUILD/initramfs-virt" || {
-    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt" "$BUILD/modloop-virt"
     echo "  ERROR: Alpine initramfs is corrupt."
     exit 1
 }
@@ -202,19 +212,35 @@ if ! (cd "$MODTMP" && zcat "$BUILD/initramfs-virt" | cpio -id --quiet \
     'lib/modules/*/kernel/drivers/net/virtio_net.ko*' \
     'lib/modules/*/kernel/drivers/net/net_failover.ko*' \
     'lib/modules/*/kernel/net/core/failover.ko*' \
-    'lib/modules/*/kernel/net/packet/af_packet.ko*' \
-    'lib/modules/*/kernel/drivers/virtio/*' \
-    'lib/modules/*/kernel/fs/9p/*' \
-    'lib/modules/*/kernel/net/9p/*' 2>/dev/null); then
-    rm -rf "$MODTMP" "$INITRD/lib/modules" "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    'lib/modules/*/kernel/net/packet/af_packet.ko*' 2>/dev/null); then
+    rm -rf "$MODTMP" "$INITRD/lib/modules"
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt" "$BUILD/modloop-virt"
     echo "  ERROR: Cannot extract NIC modules from Alpine initramfs."
     exit 1
 fi
+KERNEL_RELEASE="$(find "$MODTMP/lib/modules" -mindepth 1 -maxdepth 1 -type d -name '*-virt' | head -n 1 | sed 's#.*/##')"
+if [ -z "$KERNEL_RELEASE" ] || ! unsquashfs -ll "$BUILD/modloop-virt" | grep "modules/$KERNEL_RELEASE/" >/dev/null; then
+    rm -rf "$MODTMP" "$INITRD/lib/modules"
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt" "$BUILD/modloop-virt"
+    echo "  ERROR: Alpine module loop does not match kernel release ${KERNEL_RELEASE:-unknown}."
+    exit 1
+fi
+if ! unsquashfs -f -d "$MODTMP/modloop" "$BUILD/modloop-virt" \
+    "modules/$KERNEL_RELEASE/kernel/fs/9p/9p.ko" \
+    "modules/$KERNEL_RELEASE/kernel/fs/netfs/netfs.ko" \
+    "modules/$KERNEL_RELEASE/kernel/net/9p/9pnet.ko" \
+    "modules/$KERNEL_RELEASE/kernel/net/9p/9pnet_virtio.ko" >/dev/null 2>&1; then
+    rm -rf "$MODTMP" "$INITRD/lib/modules"
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt" "$BUILD/modloop-virt"
+    echo "  ERROR: Cannot extract 9p persistence modules."
+    exit 1
+fi
+find "$MODTMP/modloop/modules/$KERNEL_RELEASE/kernel" -type f -name '*.ko*' -exec cp {} "$MODTMP/lib/modules/" \;
 mkdir -p "$INITRD/lib/modules"
 find "$MODTMP/lib/modules" -type f -name '*.ko*' -exec cp {} "$INITRD/lib/modules/" \;
 rm -rf "$MODTMP"
 if ! find "$INITRD/lib/modules" -maxdepth 1 -type f -name 'e1000.ko*' | grep -q .; then
-    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt" "$BUILD/modloop-virt"
     echo "  ERROR: Required e1000 NIC module missing from Alpine initramfs."
     exit 1
 fi
