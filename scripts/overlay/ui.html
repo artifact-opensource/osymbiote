@@ -102,6 +102,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
       <button data-t="system">📊 System</button>
       <button data-t="network">🌐 Network</button>
       <button data-t="procs">⚙ Processes</button>
+      <button data-t="tools">🛠 Native tools</button>
       <button data-t="shell">💻 Shell</button>
       <button data-t="account">🔐 Account</button>
     </nav>
@@ -153,8 +154,15 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
       <section class="pane" id="p-network"><div class="card"><div class="row"><h2>Network</h2><button class="sec auto sm" onclick="loadNet()">Refresh</button></div><pre id="netOut">…</pre></div></section>
       <section class="pane" id="p-procs"><div class="card"><div class="row"><h2>Processes</h2><button class="sec auto sm" onclick="loadProcs()">Refresh</button></div><pre id="procOut">…</pre></div></section>
 
+      <section class="pane" id="p-tools"><div class="card">
+        <h2>Native file tools</h2><p class="sub">Read text files as root. Writes are staged atomically and require explicit confirmation.</p>
+        <label>Absolute file path</label><input id="toolPath" class="mono" placeholder="/etc/hostname">
+        <label>Text content</label><textarea id="toolContent" rows="12" class="mono" placeholder="Read a file or enter replacement content"></textarea>
+        <div class="row"><button class="sec" onclick="readFile()">Read file</button><button class="dang auto" onclick="writeFile()">Confirm and write</button></div>
+        <pre id="toolOut">File tools operate with root privileges.</pre></div></section>
+
       <section class="pane" id="p-shell"><div class="card">
-        <h2>Shell</h2><p class="sub">Runs a command as root in the OS (30s timeout).</p>
+        <h2>Shell</h2><p class="sub">Runs a command as root in the OS (30s timeout); every command requires confirmation.</p>
         <pre id="shOut" style="min-height:200px">$ </pre>
         <div class="compose"><input id="shIn" class="mono" placeholder="uname -a" style="margin:0"><button onclick="runShell()">Run</button></div></div></section>
 
@@ -200,7 +208,7 @@ document.getElementById('nav').addEventListener('click',e=>{const b=e.target.clo
 function onTab(t,force){
   tab=t;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
   document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t));
-  ({chat:loadChat,history:loadHistory,prompt:loadPrompt,llm:loadLlm,memory:loadMemory,system:loadSystem,shell:()=>$('shIn').focus(),network:loadNet,procs:loadProcs}[t]||(()=>{}))();
+  ({chat:loadChat,history:loadHistory,prompt:loadPrompt,llm:loadLlm,memory:loadMemory,system:loadSystem,shell:()=>$('shIn').focus(),network:loadNet,procs:loadProcs,tools:()=>$('toolPath').focus()}[t]||(()=>{}))();
 }
 function addMsg(role,text,ts){const d=document.createElement('div');d.className='msg '+role;if(ts){const s=document.createElement('small');s.textContent=ts;d.appendChild(s)}d.appendChild(document.createTextNode(text));$('msgs').appendChild(d);$('msgs').scrollTop=1e9;return d}
 
@@ -278,7 +286,25 @@ async function loadSystem(){
   $('sProv').textContent=JSON.stringify((await api('/provider')).data,null,2);
   const d=await api('/system/disk');$('sDisk').textContent=d.data.output||JSON.stringify(d.data);
 }
-async function runShell(){const c=$('shIn').value.trim();if(!c)return;$('shIn').value='';const o=$('shOut');o.textContent+=c+'\n';const r=await api('/exec',{method:'POST',body:c});o.textContent+=(r.ok?r.data.output:'error: '+(r.data.error||r.code))+'\n$ ';o.scrollTop=1e9}
+async function runShell(){
+  const c=$('shIn').value.trim();if(!c)return;
+  if(!confirm('Run this command as root?\n\n'+c))return;
+  $('shIn').value='';const o=$('shOut');o.textContent+=c+'\n';
+  const r=await api('/exec',{method:'POST',headers:{'X-OSYM-User-Confirmed':'yes'},body:c});
+  o.textContent+=(r.ok?r.data.output:'error: '+(r.data.error||r.code))+'\n$ ';o.scrollTop=1e9
+}
+async function readFile(){
+  const path=$('toolPath').value.trim();if(!path){toast('Enter an absolute path',true);return}
+  const r=await api('/fs/read',{method:'POST',headers:{'X-OSYM-Path':path},body:''});
+  if(r.ok){$('toolContent').value=r.data.content;$('toolOut').textContent=(r.data.truncated?'File truncated to 32 KiB: ':'Read: ')+r.data.path}
+  else $('toolOut').textContent='Read failed: '+(r.data.error||r.code)
+}
+async function writeFile(){
+  const path=$('toolPath').value.trim();if(!path){toast('Enter an absolute path',true);return}
+  if(!confirm('Write this content as root to '+path+'?'))return;
+  const r=await api('/fs/write',{method:'POST',headers:{'X-OSYM-Path':path,'X-OSYM-User-Confirmed':'yes'},body:$('toolContent').value});
+  $('toolOut').textContent=r.ok?'Wrote '+r.data.bytes+' bytes to '+r.data.path:'Write failed: '+(r.data.error||r.code)
+}
 $('shIn').addEventListener('keydown',e=>{if(e.key==='Enter')runShell()});
 async function loadNet(){const r=await api('/system/network');$('netOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}
 async function loadProcs(){const r=await api('/system/processes');$('procOut').textContent=r.data.output||JSON.stringify(r.data,null,2)}

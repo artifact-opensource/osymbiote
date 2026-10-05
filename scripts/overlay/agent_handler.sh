@@ -22,6 +22,8 @@ AUTH_HEADER=""
 COOKIE_HEADER=""
 SESSION_HEADER=""
 TOOL_CALL_TEST_HEADER=""
+TOOL_PATH_HEADER=""
+TOOL_CONFIRMED_HEADER=""
 while IFS= read -r -t 15 header; do
     header="$(printf '%s' "$header" | tr -d '\r')"
     [ -z "$header" ] && break
@@ -31,17 +33,19 @@ while IFS= read -r -t 15 header; do
         Cookie:*|cookie:*) COOKIE_HEADER="${header#*: }" ;;
         X-Session-Token:*|x-session-token:*) SESSION_HEADER="${header#*: }" ;;
         X-Tool-Call-Test:*|x-tool-call-test:*) TOOL_CALL_TEST_HEADER="${header#*: }" ;;
+        X-OSYM-Path:*|x-osym-path:*) TOOL_PATH_HEADER="${header#*: }" ;;
+        X-OSYM-User-Confirmed:*|x-osym-user-confirmed:*) TOOL_CONFIRMED_HEADER="${header#*: }" ;;
     esac
 done
 
 BODY=""
+BODY_FILE="$(mktemp /tmp/osym-body.XXXXXX)" || exit 0
 case "$CONTENT_LENGTH" in ''|*[!0-9]*) CONTENT_LENGTH=0 ;; esac
 BODY_TOO_LARGE=0
 if [ "$CONTENT_LENGTH" -gt 65536 ]; then BODY_TOO_LARGE=1; fi
 if [ "$CONTENT_LENGTH" -gt 0 ]; then
     [ "$BODY_TOO_LARGE" -eq 1 ] && CONTENT_LENGTH=0
     if [ "$CONTENT_LENGTH" -gt 0 ]; then
-        BODY_FILE="$(mktemp /tmp/osym-body.XXXXXX)" || exit 0
         if ! timeout 15 head -c "$CONTENT_LENGTH" > "$BODY_FILE" 2>/dev/null; then
             rm -f "$BODY_FILE"; exit 0
         fi
@@ -49,7 +53,6 @@ if [ "$CONTENT_LENGTH" -gt 0 ]; then
             rm -f "$BODY_FILE"; exit 0
         }
         BODY="$(cat "$BODY_FILE")"
-        rm -f "$BODY_FILE"
     fi
 fi
 
@@ -530,9 +533,85 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             if enforce_auth && need_post; then
                 if [ -z "$BODY" ]; then
                     STATUS="400 Bad Request"; RESP='{"error":"missing_command"}'
+                elif [ "$TOOL_CONFIRMED_HEADER" != "yes" ]; then
+                    STATUS="428 Precondition Required"
+                    RESP='{"error":"user_confirmation_required","hint":"confirm this root command in the portal"}'
                 else
                     EXEC_OUT="$(timeout 30 sh -c "$BODY" 2>&1 | head -c 32768)"
                     RESP="{\"command\":\"$(json_escape "$BODY")\",\"output\":\"$(json_escape "$EXEC_OUT")\"}"
+                fi
+            fi
+            ;;
+        /fs/read)
+            if enforce_auth && need_post; then
+                case "$TOOL_PATH_HEADER" in
+                    /*) ;;
+                    *) STATUS="400 Bad Request"; RESP='{"error":"absolute_path_required"}' ;;
+                esac
+                case "$TOOL_PATH_HEADER" in
+                    *"/../"*|*/..|*"/./"*|*/.)
+                        STATUS="400 Bad Request"; RESP='{"error":"path_traversal_not_allowed"}' ;;
+                esac
+                if [ "$STATUS" = "200 OK" ]; then
+                    if [ ! -f "$TOOL_PATH_HEADER" ] || [ ! -r "$TOOL_PATH_HEADER" ]; then
+                        STATUS="404 Not Found"; RESP='{"error":"file_not_readable"}'
+                    else
+                        TOOL_READ_TMP="$(mktemp /tmp/osym-read.XXXXXX)" || TOOL_READ_TMP=""
+                        if [ -z "$TOOL_READ_TMP" ] || ! head -c 32769 "$TOOL_PATH_HEADER" > "$TOOL_READ_TMP" 2>/dev/null; then
+                            [ -z "$TOOL_READ_TMP" ] || rm -f "$TOOL_READ_TMP"
+                            STATUS="500 Internal Server Error"; RESP='{"error":"file_read_failed"}'
+                        else
+                            TOOL_READ_SIZE="$(wc -c < "$TOOL_READ_TMP" | tr -d ' ')"
+                            TOOL_TRUNCATED=false
+                            [ "$TOOL_READ_SIZE" -gt 32768 ] && TOOL_TRUNCATED=true
+                            TOOL_CONTENT="$(head -c 32768 "$TOOL_READ_TMP"; printf '\001')"
+                            TOOL_CONTENT="${TOOL_CONTENT%?}"
+                            rm -f "$TOOL_READ_TMP"
+                            RESP="{\"path\":\"$(json_escape "$TOOL_PATH_HEADER")\",\"content\":\"$(json_escape "$TOOL_CONTENT")\",\"truncated\":$TOOL_TRUNCATED}"
+                        fi
+                    fi
+                fi
+            fi
+            ;;
+        /fs/write)
+            if enforce_auth && need_post; then
+                if [ "$TOOL_CONFIRMED_HEADER" != "yes" ]; then
+                    STATUS="428 Precondition Required"
+                    RESP='{"error":"user_confirmation_required","hint":"confirm this file write in the portal"}'
+                else
+                    case "$TOOL_PATH_HEADER" in
+                        /*) ;;
+                        *) STATUS="400 Bad Request"; RESP='{"error":"absolute_path_required"}' ;;
+                    esac
+                    case "$TOOL_PATH_HEADER" in
+                        *"/../"*|*/..|*"/./"*|*/.)
+                            STATUS="400 Bad Request"; RESP='{"error":"path_traversal_not_allowed"}' ;;
+                    esac
+                    if [ "$STATUS" = "200 OK" ]; then
+                        TOOL_DIR="$(dirname "$TOOL_PATH_HEADER")"
+                        if [ ! -d "$TOOL_DIR" ] || [ -d "$TOOL_PATH_HEADER" ]; then
+                            STATUS="400 Bad Request"; RESP='{"error":"invalid_file_target"}'
+                        else
+                            TOOL_TMP="$(mktemp "$TOOL_DIR/.osym-write.XXXXXX" 2>/dev/null)" || TOOL_TMP=""
+                            if [ -z "$TOOL_TMP" ] || ! cat "$BODY_FILE" > "$TOOL_TMP"; then
+                                [ -z "$TOOL_TMP" ] || rm -f "$TOOL_TMP"
+                                STATUS="500 Internal Server Error"; RESP='{"error":"file_stage_failed"}'
+                            else
+                                if [ -f "$TOOL_PATH_HEADER" ]; then
+                                    TOOL_MODE="$(stat -c '%a' "$TOOL_PATH_HEADER" 2>/dev/null)"
+                                    case "$TOOL_MODE" in *[!0-7]*|'') TOOL_MODE=600 ;; esac
+                                else
+                                    TOOL_MODE=600
+                                fi
+                                if chmod "$TOOL_MODE" "$TOOL_TMP" 2>/dev/null && mv "$TOOL_TMP" "$TOOL_PATH_HEADER"; then
+                                    RESP="{\"status\":\"written\",\"path\":\"$(json_escape "$TOOL_PATH_HEADER")\",\"bytes\":$CONTENT_LENGTH}"
+                                else
+                                    rm -f "$TOOL_TMP"
+                                    STATUS="500 Internal Server Error"; RESP='{"error":"file_write_failed"}'
+                                fi
+                            fi
+                        fi
+                    fi
                 fi
             fi
             ;;
@@ -549,7 +628,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             ;;
         *)
             STATUS="404 Not Found"
-            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/system/network","/system/processes","/system/disk","/system/memory"]}'
+            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/fs/read","/fs/write","/system/network","/system/processes","/system/disk","/system/memory"]}'
             ;;
     esac
 fi
@@ -559,5 +638,6 @@ if [ -n "$RESP_FILE" ]; then
 else
     RESP_LEN="$(printf '%s' "$RESP" | wc -c | tr -d ' ')"
 fi
-printf "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Session-Token\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n%b\r\n" "$STATUS" "$CONTENT_TYPE" "$RESP_LEN" "$EXTRA_HEADERS"
+printf "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Session-Token, X-OSYM-Path, X-OSYM-User-Confirmed\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n%b\r\n" "$STATUS" "$CONTENT_TYPE" "$RESP_LEN" "$EXTRA_HEADERS"
 if [ -n "$RESP_FILE" ]; then cat "$RESP_FILE"; else printf '%s' "$RESP"; fi
+rm -f "$BODY_FILE"

@@ -134,7 +134,7 @@ The agent exposes a REST API on port `8422` (forwarded to host `8422` by default
 
 | Endpoint | Description |
 |---|---|
-| `/ui` | Single-file setup/login UI plus a tabbed dashboard (Chat, System, Memory, Network, Processes) once authenticated |
+| `/ui` | Single-file setup/login UI plus a tabbed dashboard (Chat, System, Memory, Network, Processes, Native tools) once authenticated |
 | `/setup/status` | First-boot setup status |
 | `/setup/init` (POST password body) | Initialize password (salted hash only) |
 | `/auth/login` (POST password body) | Login and receive short-lived session cookie |
@@ -153,7 +153,9 @@ The agent exposes a REST API on port `8422` (forwarded to host `8422` by default
 | `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
 | `/comb/stage` (POST body text) | Auth-required append memory entry |
 | `/comb/recall` | Auth-required read recent memory entries |
-| `/exec` (POST shell command body) | Auth-required root shell execution (30s timeout) |
+| `/fs/read` (POST, `X-OSYM-Path: /absolute/path`) | Auth-required text-file read, limited to 32 KiB |
+| `/fs/write` (POST body text, `X-OSYM-Path: /absolute/path`) | Auth-required atomic text-file write; requires `X-OSYM-User-Confirmed: yes` |
+| `/exec` (POST shell command body) | Auth-required root shell execution (30s timeout); requires `X-OSYM-User-Confirmed: yes` |
 
 All responses are JSON with CORS headers.
 
@@ -161,6 +163,7 @@ All responses are JSON with CORS headers.
 
 On a fresh boot, only setup routes are available. Initialize with `POST /setup/init`, then login via `POST /auth/login`.  
 Session auth uses a short-lived cookie (`osym_session`, 15 minutes). Sensitive routes enforce auth.
+The portal asks for confirmation before each root command or file write. These native tools are user-driven; LLM tool invocation is not enabled. This phase's image build remains x86_64/QEMU-focused; bare-metal and ARM64 boot support are not yet implemented.
 
 Auth hardening included:
 - rate limiting on setup/login endpoints
