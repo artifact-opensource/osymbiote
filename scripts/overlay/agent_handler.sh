@@ -2,6 +2,8 @@
 # OSymbiote HTTP agent — one request per invocation (tcpsvd / nc -e).
 OSYM_LIB="${OSYM_LIB:-/usr/lib/osym}"
 OSYM_UI="${OSYM_UI:-/usr/share/osym/ui.html}"
+OSYM_VERSION="$(cat /etc/osymbiote/version 2>/dev/null)"
+case "$OSYM_VERSION" in ''|*[!0-9.]* ) OSYM_VERSION="0.4.0" ;; esac
 . "$OSYM_LIB/lib.sh"
 
 read -r -t 15 REQUEST_LINE || exit 0
@@ -500,7 +502,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             if is_authenticated; then AUTH_STATE=true; else AUTH_STATE=false; fi
             if is_setup_complete; then SETUP_STATE=true; else SETUP_STATE=false; fi
             [ "${OSYM_DATA_PERSISTENT:-0}" = "1" ] && PERSISTENCE=true || PERSISTENCE=false
-            RESP="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"version\":\"0.3.0\",\"uptime_s\":${UPTIME:-0},\"cores\":$CORES,\"mem_free_kb\":${MEM_FREE:-0},\"mem_total_kb\":${MEM_TOTAL:-0},\"setup_complete\":$SETUP_STATE,\"authenticated\":$AUTH_STATE,\"data_persistent\":$PERSISTENCE}"
+            RESP="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"version\":\"$OSYM_VERSION\",\"uptime_s\":${UPTIME:-0},\"cores\":$CORES,\"mem_free_kb\":${MEM_FREE:-0},\"mem_total_kb\":${MEM_TOTAL:-0},\"setup_complete\":$SETUP_STATE,\"authenticated\":$AUTH_STATE,\"data_persistent\":$PERSISTENCE}"
             ;;
         /provider)
             RESP="{\"provider\":\"$AI_PROVIDER\",\"base_url\":\"$OPENAI_BASE_URL\",\"model\":\"$OPENAI_MODEL\",\"protocol\":\"openai-compatible\"}"

@@ -258,6 +258,7 @@ install -m 0644 "$OVERLAY/lib.sh" "$INITRD/usr/lib/osym/lib.sh"
 install -m 0644 "$OVERLAY/ui.html" "$INITRD/usr/share/osym/ui.html"
 install -m 0644 "$OVERLAY/osymbiote.env.example" "$INITRD/etc/osymbiote/.env.example"
 install -m 0644 "$OVERLAY/system.conf.example" "$INITRD/etc/osymbiote/system.conf.example"
+install -m 0644 "$OSYM/VERSION" "$INITRD/etc/osymbiote/version"
 
 # ── /etc basics ──
 echo "osymbiote" > "$INITRD/etc/hostname"
