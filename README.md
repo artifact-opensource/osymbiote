@@ -43,9 +43,9 @@ No systemd, no cron, no login manager — true today, same as the original claim
 
 ## What It Does Today (Phase 1 — Proof of Life)
 
-- **Boots to agent in a few seconds** on QEMU (x86_64)
+- **Builds QEMU images** for x86_64; the ARM64 `virt` image builds and passes artifact checks, but has not yet been boot-tested here
 - **BusyBox userland** — ~40 coreutils symlinks, a custom `comb` memory script, a shell
-- **Networking** — DHCP via udhcpc on `eth0`/`ens0`/`enp0s3`
+- **Networking** — DHCP via udhcpc on the first available non-loopback interface
 - **Boot shell (`osh`)** — the console drops into an interactive shell on boot (`help`, `status`, `chat`, `ask`, `llm …`, `sysconfig`, `prompt`, `history`, `memory`, `net`, `webpass`, `agent`, `doctor`); any other command runs as a normal BusyBox command. LLM settings and system policy are configured from the shell.
 - **LLM tool use** — the portal offers file-read, file-write, and root-command tools. Each mutation requires a separate confirmation and server-side authorization.
 - **Web portal** — single-file HTML/CSS/JS portal at `http://localhost:8422/ui` with Chat, History, Prompt, LLM & Provider, Memory, System, Network, Processes and Account panes
@@ -84,7 +84,7 @@ OSymbiote boots **inside a QEMU virtual machine**. The host (Linux, WSL2, or Ter
 
 ### Prerequisites
 
-- QEMU (`qemu-system-x86_64`)
+- QEMU (`qemu-system-x86_64`; add `qemu-system-aarch64` for ARM64)
 - `squashfs-tools` (`unsquashfs`) for extracting kernel-matched 9p modules
 - Linux host, WSL2, or **Termux on Android**
 - Internet connection (for the build step and for LLM calls)
@@ -110,6 +110,17 @@ bash scripts/build-phase1.sh   # installs QEMU, squashfs-tools, wget, curl, core
 ```
 
 This downloads a matching Alpine Linux kernel, initramfs, and module loop, fetches a static BusyBox, extracts the required NIC and 9p persistence modules, assembles the initramfs, and produces a bootable image (`build/vmlinuz` + `images/initramfs.cpio.gz`).
+
+### ARM64 QEMU reference target
+
+```bash
+./scripts/build-arm64.sh
+./run-arm64.sh
+```
+
+This builds a separate AArch64 image from matching Alpine `virt` kernel/module artifacts and an ARM64 static BusyBox. The launcher uses QEMU's `virt` machine, `virtio-net-pci`, a serial console, port forwarding, and the same optional persistent `/data` share as the x86_64 launcher. QEMU ARM system emulation must be installed on the host. Set `OSYM_PERSIST=0` for a volatile run; `OSYM_PORT`, `OSYM_RAM`, `OSYM_CPUS`, and `OSYM_DATA_DIR` override launcher defaults.
+
+This is a generic QEMU ARM64 reference target, not board certification or a vendor image. Raspberry Pi, Rockchip, NXP i.MX, Jetson, Qualcomm, and ARM FVP targets need their respective firmware/boot chain, device trees, kernel drivers, and hardware validation before they can be described as supported.
 
 ### Run
 
@@ -170,7 +181,7 @@ All responses are JSON with CORS headers.
 
 On a fresh boot, only setup routes are available. Initialize with `POST /setup/init`, then login via `POST /auth/login`.  
 Session auth uses a short-lived cookie (`osym_session`, 15 minutes). Sensitive routes enforce auth.
-The portal supports LLM-proposed file reads, writes, and shell commands, with at most three model/tool rounds and two tool calls per round. Writes and root commands always require explicit per-operation confirmation; denied actions are returned to the model as tool results. This phase's image build remains x86_64/QEMU-focused; bare-metal and ARM64 boot support are not yet implemented.
+The portal supports LLM-proposed file reads, writes, and shell commands, with at most three model/tool rounds and two tool calls per round. Writes and root commands always require explicit per-operation confirmation; denied actions are returned to the model as tool results. The x86_64 and generic ARM64 QEMU `virt` build paths are available. Vendor-board bare-metal images and board certification remain unimplemented.
 
 Auth hardening included:
 - rate limiting on setup/login endpoints
@@ -228,7 +239,7 @@ Today this is capability detection, not real per-arch logic — every family run
 | **4** | Immune System — self-healing, process resurrection, resource management | Planned — today is a restart-if-dead loop for one process |
 | **5** | Persistent Memory — survives reboots, learns from history | 🟡 `/data` survives QEMU restarts; indexing/search and hardware storage discovery remain planned |
 | **6** | Multi-Agent — spawn child agents, coordinate across machines | Planned — not started |
-| **7** | Bare Metal — real hardware boot, ARM64 support, GPU passthrough | Planned — only tested under QEMU x86_64 today |
+| **7** | Bare Metal — real hardware boot, ARM64 support, GPU passthrough | 🟡 Generic QEMU ARM64 `virt` build/launcher added; vendor-board and real-hardware boot remain planned and unverified |
 
 ---
 
@@ -239,11 +250,13 @@ osymbiote/
 ├── BLUEPRINT.md              # Long-term technical vision (mostly unimplemented)
 ├── README.md                 # This file
 ├── LICENSE                   # MIT
-├── run.sh                    # Boot OSymbiote in QEMU (host-side launcher)
+├── run.sh                    # Boot x86_64 OSymbiote in QEMU
+├── run-arm64.sh              # Boot ARM64 virt OSymbiote in QEMU
 ├── boot.sh                   # Generated snapshot of build-phase1.sh's boot helper
 ├── test.sh                   # Generated snapshot of build-phase1.sh's smoke test
 ├── scripts/
-│   ├── build-phase1.sh       # Downloads kernel + busybox and builds the initramfs
+│   ├── build-phase1.sh       # Builds the x86_64 initramfs
+│   ├── build-arm64.sh        # Builds the ARM64 QEMU virt initramfs
 │   ├── overlay/              # Guest sources, config examples and files installed into initramfs
 │   └── aegis-orchestrator.sh # Personal deployment tooling (hardcoded host/path, not portable)
 ├── build/                    # Build output (gitignored): assembled initramfs tree

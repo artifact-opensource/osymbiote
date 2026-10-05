@@ -52,19 +52,21 @@ echo "[init] Hardware: ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}"
 
 echo "[init] Network..."
 # NIC drivers ship as modules; dependency order matters.
-for m in af_packet failover net_failover virtio_net e1000; do
+for m in af_packet failover net_failover virtio_ring virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_net e1000; do
     for f in /lib/modules/$m.ko /lib/modules/$m.ko.gz; do
         [ -f "$f" ] && { insmod "$f" 2>/dev/null; break; }
     done
 done
 sleep 1
 ip link set lo up 2>/dev/null
-for iface in eth0 ens0 enp0s3; do
+for iface_path in /sys/class/net/*; do
+    iface=${iface_path##*/}
+    [ "$iface" = lo ] && continue
     [ -e "/sys/class/net/$iface" ] || continue
     ip link set "$iface" up 2>/dev/null
     # wait for link (up to ~10s), then DHCP with retries
     n=0
-    while [ "$n" -lt 10 ] && [ "$(cat /sys/class/net/$iface/carrier 2>/dev/null)" != "1" ]; do sleep 1; n=$((n + 1)); done
+    while [ "$n" -lt 10 ] && [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" != "1" ]; do sleep 1; n=$((n + 1)); done
     t=0
     while [ "$t" -lt 4 ]; do
         udhcpc -i "$iface" -s /etc/udhcpc.sh -q -n >/dev/null 2>&1

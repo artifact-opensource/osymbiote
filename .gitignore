@@ -24,3 +24,5 @@ data/
 *~
 build/initrd/
 build/initramfs-virt
+build/arm64/
+images/arm64-initramfs.cpio.gz
