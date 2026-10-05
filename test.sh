@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BASE_URL="${OSYM_BASE_URL:-http://localhost:18422}"
+BASE_URL="${OSYM_BASE_URL:-http://localhost:8422}"
 SETUP_PASSWORD="${OSYM_SETUP_PASSWORD:-osym-setup-$(date +%s)-$$}"
 LOGIN_PASSWORD="${OSYM_LOGIN_PASSWORD:-$SETUP_PASSWORD}"
 PROVIDER_AUTH_HEADER="${OPENROUTER_AUTH_HEADER:-}"
@@ -73,6 +73,9 @@ echo ""
 AUTH_COOKIE="Cookie: osym_session=$COOKIE"
 
 call "Health (authed)" -H "$AUTH_COOKIE" "$BASE_URL/health"
+call "Data persistence status" "$BASE_URL/health"
+call "System config (authed)" -H "$AUTH_COOKIE" "$BASE_URL/system/config"
+call_expect_code "File write requires confirmation" "428" -H "$AUTH_COOKIE" -X POST "$BASE_URL/fs/write"
 call "Provider" "$BASE_URL/provider"
 call "Hardware" "$BASE_URL/hardware"
 call "Chat (authed)" -H "$AUTH_COOKIE" -X POST -d "Hello, are you alive?" "$BASE_URL/chat"

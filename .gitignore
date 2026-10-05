@@ -15,6 +15,16 @@ images/initramfs.cpio.gz
 
 # OS
 .DS_Store
+.env
+.env.*
+!.env.example
+data/
 *.swp
 *.swo
 *~
+build/initrd/
+build/initramfs-virt
+build/arm64/
+images/arm64-initramfs.cpio.gz
+images/osymbiote-*
+images/.package-*/

@@ -6,6 +6,8 @@
 **Status:** DESIGN — Pre-implementation  
 **Classification:** Artifact Virtual — Core Infrastructure
 
+> **Document status:** This is an aspirational design blueprint, not a description of OSymbiote 0.4.0 or a support commitment. For implemented behavior and validated targets, use the root README and `docs/`. Reviewed against the project status on October 5, 2026.
+
 ---
 
 ## 1. Vision

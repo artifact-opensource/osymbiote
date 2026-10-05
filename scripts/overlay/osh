@@ -1,0 +1,259 @@
+#!/bin/sh
+# osh — OSymbiote interactive shell. Builtins below are shell functions; anything
+# else falls through to the system shell, so every registered command still works.
+OSYM_LIB="${OSYM_LIB:-/usr/lib/osym}"
+. "$OSYM_LIB/lib.sh"
+
+OSYM_PORT_GUEST=8422
+BUILTINS="help status llm model prompt chat ask history memory sysconfig net sysinfo webpass agent doctor cmds clear logout reboot poweroff"
+
+c_dim() { printf '\033[2m%s\033[0m\n' "$*"; }
+c_ok() { printf '\033[32m%s\033[0m\n' "$*"; }
+c_err() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+c_hd() { printf '\033[1;35m%s\033[0m\n' "$*"; }
+
+banner() {
+    printf '\033[35m'
+    cat <<'B'
+   ___  ____              _     _       _
+  / _ \/ ___| _   _ _ __ | |__ (_) ___ | |_ ___
+ | | | \___ \| | | | '_ \| '_ \| |/ _ \| __/ _ \
+ | |_| |___) | |_| | | | | |_) | | (_) | ||  __/
+  \___/|____/ \__, |_| |_|_.__/|_|\___/ \__\___|
+              |___/
+B
+    printf '\033[0m'
+    c_dim "  the agent is the operating system   —  type 'help' to begin"
+    echo
+}
+
+ip_addr() { ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | grep -v '^127\.' | head -n 1 | cut -d/ -f1; }
+
+help() {
+    c_hd "OSymbiote shell"
+    cat <<'H'
+  status                     system + agent + LLM summary
+  chat                       interactive chat with the agent LLM (/exit to leave)
+  ask <text>                 one-shot question to the agent LLM
+  llm show                   show LLM provider configuration
+  llm preset <name>          openrouter | openai | ollama | lmstudio
+  llm set <key> <value>      provider base_url model api_key temperature max_tokens history_turns
+  llm key <api-key>          set API key (llm key - to clear)
+  llm url <url>              set base URL
+  llm model <name>           set model (also: model <name>)
+  llm models                 list models offered by the provider
+  llm test [text]            send a test request
+  llm reset                  restore defaults (keeps nothing)
+  prompt [show|set <text>|reset]   system prompt
+  history [N|clear]          conversation history
+  memory [recall [N]|stage <text>|stats|clear]   COMB memory
+  sysconfig [show|set <key> <value>]   system roles, sudo policy and owner IDs
+  net                        network info and web UI URL
+  sysinfo                    hardware manifest
+  webpass [<password>]       set/reset the web portal password (min 8 chars)
+  agent [status|restart|url] HTTP agent control
+  doctor                     verify commands and builtins are registered
+  cmds                       list builtins and available system commands
+  clear | logout | reboot | poweroff
+  Any other input runs as a normal system command (ls, ps, df, vi, ...).
+H
+}
+
+status() {
+    c_hd "System"
+    echo "  host     $(hostname) ($(uname -m))"
+    echo "  uptime   $(cut -d' ' -f1 /proc/uptime)s"
+    echo "  memory   $(awk '/MemAvailable/{a=$2}/MemTotal/{t=$2}END{printf "%d / %d MB free", a/1024, t/1024}' /proc/meminfo)"
+    echo "  ip       $(ip_addr)"
+    c_hd "Agent"
+    if wget -qO- -T 2 "http://127.0.0.1:$OSYM_PORT_GUEST/health" >/dev/null 2>&1; then c_ok "  http     listening on :$OSYM_PORT_GUEST"; else c_err "  http     NOT responding on :$OSYM_PORT_GUEST"; fi
+    if is_setup_complete; then echo "  portal   password set"; else echo "  portal   password NOT set — run: webpass"; fi
+    c_hd "LLM"
+    echo "  provider $(cfg_get provider)"
+    echo "  base_url $(cfg_get base_url)"
+    echo "  model    $(cfg_get model)"
+    if [ -n "$(cfg_get api_key)" ]; then echo "  api_key  $(mask_key)"; else c_err "  api_key  not set — run: llm key <key>"; fi
+}
+
+llm() {
+    case "${1:-show}" in
+        show)
+            for k in $CFG_KEYS; do
+                if [ "$k" = api_key ]; then printf '  %-14s %s\n' "$k" "$(mask_key)"; else printf '  %-14s %s\n' "$k" "$(cfg_get "$k")"; fi
+            done ;;
+        preset) llm_preset "${2:-}" && c_ok "preset ${2} applied (base_url=$(cfg_get base_url))" || c_err "unknown preset; use openrouter|openai|ollama|lmstudio" ;;
+        set)
+            [ $# -ge 3 ] || { c_err "usage: llm set <key> <value>"; return 1; }
+            _k="$2"; shift 2
+            cfg_set "$_k" "$*"
+            case $? in 0) c_ok "$_k updated" ;; 1) c_err "unknown key '$_k' (keys: $CFG_KEYS)" ;; *) c_err "invalid value for $_k" ;; esac ;;
+        key)
+            if [ "${2:-}" = "-" ] || [ -z "${2:-}" ]; then cfg_unset api_key && c_ok "API credentials cleared" || c_err "could not clear API credentials"
+            else cfg_set api_key "$2" && c_ok "api_key stored" || c_err "invalid key (no spaces, quotes or backslashes)"; fi ;;
+        url) llm set base_url "${2:-}" ;;
+        model) llm set model "${2:-}" ;;
+        models)
+            [ -n "$(cfg_get api_key)" ] || { c_err "set an API key first: llm key <key>"; return 1; }
+            llm_models_raw | tr -d '\n' | grep -oE '"id": *"[^"]+"' | sed -E 's/"id": *"([^"]+)"/  \1/' | head -n 100 ;;
+        test)
+            shift 2>/dev/null
+            if llm_chat "${*:-Reply with the single word: pong}"; then printf '%s\n' "$LLM_REPLY" | json_unescape; else c_err "failed: $LLM_ERR"; return 1; fi ;;
+        reset)
+            if lock_acquire config; then rm -f "$CFG_FILE"; lock_release
+            else c_err "could not lock LLM configuration"; return 1; fi
+            if cfg_unset api_key; then c_ok "LLM settings and API credentials reset (environment routing defaults remain)"
+            else c_err "LLM settings reset, but API credentials could not be cleared"; return 1; fi ;;
+        *) c_err "usage: llm [show|preset|set|key|url|model|models|test|reset]"; return 1 ;;
+    esac
+}
+
+model() { if [ -z "${1:-}" ]; then cfg_get model; echo; else llm set model "$1"; fi; }
+
+prompt() {
+    case "${1:-show}" in
+        show) prompt_get; echo ;;
+        set) shift; [ -n "$*" ] || { c_err "usage: prompt set <text>"; return 1; }; prompt_set "$*"; c_ok "system prompt updated" ;;
+        reset) prompt_reset; c_ok "system prompt reset" ;;
+        *) c_err "usage: prompt [show|set <text>|reset]"; return 1 ;;
+    esac
+}
+
+ask() {
+    [ $# -gt 0 ] || { c_err "usage: ask <text>"; return 1; }
+    if llm_chat "$*"; then printf '%s\n' "$LLM_REPLY" | json_unescape
+    elif [ "$LLM_ERR" = no_api_key ]; then c_err "no API key configured — run: llm key <key>"; return 1
+    else c_err "LLM error: $LLM_ERR"; return 1; fi
+}
+
+chat() {
+    c_dim "chatting with $(cfg_get model) — /exit to leave, /clear to forget"
+    while printf '\033[36myou>\033[0m '; read -r _line; do
+        case "$_line" in
+            ''|' ') continue ;;
+            /exit|/quit) break ;;
+            /clear) history_clear; c_dim "history cleared"; continue ;;
+        esac
+        printf '\033[35magent>\033[0m '
+        ask "$_line"
+    done
+    echo
+}
+
+history() {
+    case "${1:-}" in
+        clear) history_clear; c_ok "history cleared" ;;
+        *)
+            _n="${1:-20}"
+            history_recent "$_n" | while IFS= read -r _l; do
+                _r="$(printf '%s' "$_l" | sed -nE 's/^\{"role":"([a-z]+)".*/\1/p')"
+                _c="$(printf '%s' "$_l" | sed -nE 's/^\{"role":"[a-z]+","content":"(([^"\\]|\\.)*)".*/\1/p' | json_unescape)"
+                printf '\033[1m%-10s\033[0m %s\n' "$_r" "$_c"
+            done ;;
+    esac
+}
+
+memory() {
+    case "${1:-recall}" in
+        recall) shift 2>/dev/null; "$OSYM_COMB" recall "${1:-20}" ;;
+        stage) shift; [ -n "$*" ] || { c_err "usage: memory stage <text>"; return 1; }; "$OSYM_COMB" stage "$*"; c_ok staged ;;
+        stats) "$OSYM_COMB" stats ;;
+        clear) "$OSYM_COMB" clear; c_ok "memory cleared" ;;
+        *) c_err "usage: memory [recall [N]|stage <text>|stats|clear]"; return 1 ;;
+    esac
+}
+
+sysconfig() {
+    case "${1:-show}" in
+        show)
+            system_config_json
+            echo
+            printf '  secrets: %s\n' "$ENV_FILE"
+            if [ -n "$(cfg_get api_key)" ]; then echo "  .env    credential configured (values are not displayed)"
+            else echo "  .env    no credentials configured"; fi ;;
+        set)
+            [ $# -ge 3 ] || {
+                c_err "usage: sysconfig set <key> <value>"
+                c_dim "keys: $SYSTEM_CONFIG_KEYS"
+                return 1
+            }
+            system_set "$2" "$3"
+            case $? in
+                0) c_ok "$2 updated" ;;
+                1) c_err "unknown system setting '$2' (keys: $SYSTEM_CONFIG_KEYS)" ;;
+                2) c_err "invalid value for $2" ;;
+                *) c_err "could not update system configuration"; return 1 ;;
+            esac ;;
+        *) c_err "usage: sysconfig [show|set <key> <value>]"; return 1 ;;
+    esac
+}
+
+net() {
+    ip addr show 2>/dev/null; ip route 2>/dev/null
+    echo
+    c_ok "Web portal: http://localhost:8422 (guest :$OSYM_PORT_GUEST; QEMU forwards the host port)"
+}
+
+sysinfo() { cat "${OSYM_HW:-/run/hardware.json}" 2>/dev/null || c_err "no manifest"; }
+
+webpass() {
+    _p="${1:-}"
+    if [ -z "$_p" ]; then
+        printf 'new password (min 8 chars): '; stty -echo 2>/dev/null; read -r _p; stty echo 2>/dev/null; echo
+    fi
+    set_password "$_p" && c_ok "portal password set" || c_err "password must be at least 8 characters"
+}
+
+agent() {
+    case "${1:-status}" in
+        status) if wget -qO- -T 2 "http://127.0.0.1:$OSYM_PORT_GUEST/health" 2>/dev/null; then echo; else c_err "agent not responding"; return 1; fi ;;
+        restart) pkill_agent; c_ok "agent will be restarted by the supervisor within seconds" ;;
+        url) echo "http://localhost:8422" ;;
+        *) c_err "usage: agent [status|restart|url]"; return 1 ;;
+    esac
+}
+
+pkill_agent() {
+    for _p in $(ps | awk '/tcpsvd|nc -l/ && !/awk/ {print $1}'); do kill "$_p" 2>/dev/null; done
+}
+
+doctor() {
+    _miss=0
+    for _c in $BUILTINS; do
+        if type "$_c" >/dev/null 2>&1; then :; else c_err "missing builtin: $_c"; _miss=1; fi
+    done
+    for _c in sh ls cat echo mkdir mount umount ip grep awk sed nc wget date cut wc tail head sleep kill test tr \
+              hostname uname free df ps udhcpc vi dmesg mknod chmod chown cp mv rm ln touch stat sha256sum od sort \
+              uniq tee clear find xargs printf stty setsid ping top du env timeout basename dirname id whoami reboot poweroff halt; do
+        command -v "$_c" >/dev/null 2>&1 || { c_err "missing command: $_c"; _miss=1; }
+    done
+    command -v comb >/dev/null 2>&1 || { c_err "missing command: comb"; _miss=1; }
+    [ "$_miss" -eq 0 ] && c_ok "all commands present and registered"
+    return "$_miss"
+}
+
+cmds() {
+    c_hd "Builtins"; echo "  $BUILTINS"
+    c_hd "System commands"; ls /bin /sbin /usr/bin 2>/dev/null | grep -v ':$' | grep -v '^$' | sort -u | tr '\n' ' '; echo
+}
+
+clear() { printf '\033[2J\033[H'; }
+logout() { exit 0; }
+reboot() { sync; command reboot -f; }
+poweroff() { sync; command poweroff -f; }
+
+if [ $# -gt 0 ]; then
+    [ "$1" = "-c" ] && shift
+    eval "$*"
+    exit $?
+fi
+
+HISTFILE=/tmp/.osh_history
+clear
+banner
+status
+echo
+while printf '\033[1;35mosym\033[0m\033[2m@%s\033[0m \033[35m›\033[0m ' "$(hostname)"; IFS= read -r LINE; do
+    case "$LINE" in ''|'#'*) continue ;; esac
+    eval "$LINE"
+done
+echo

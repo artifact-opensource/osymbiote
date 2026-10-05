@@ -1,253 +1,89 @@
 # OSymbiote
 
-**The agent _is_ the operating system.**
+**An experimental, minimal Linux guest with an authenticated agent API and console shell.**
 
-OSymbiote boots a Linux kernel straight into a minimal BusyBox userland whose only job is to run one shell-script agent as PID 1. There's no desktop, no login manager, no systemd — the agent's init script mounts filesystems, brings up networking, and starts serving an HTTP API, all from one script. Four moving parts, not four hundred.
+[![Versioning: SemVer](https://img.shields.io/badge/versioning-SemVer-blue)](docs/versioning.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Targets](https://img.shields.io/badge/QEMU-x86__64%20%7C%20ARM64-informational)](docs/architecture.md#supported-targets)
 
-This isn't a rewrite of the kernel or a bypass of Linux internals — it's still a normal Linux kernel underneath. What's different is the userland: instead of hundreds of background services, there's exactly one process tree rooted in the agent, and everything that would normally be a separate daemon (networking setup, health checks, the web API) lives inside that one init script.
+OSymbiote boots a Linux kernel into a small BusyBox initramfs. Its PID 1 script initializes devices and networking, supervises the HTTP handler, and keeps the `osh` console shell available. An optional OpenAI-compatible provider supplies chat and bounded tool proposals. OSymbiote is an early-stage project; it is not a general-purpose desktop OS or a certified bare-metal distribution.
 
----
+## Current status
 
-## Why
-
-Most "AI OS" projects are Linux + a chatbot + a launcher, where the agent is just another background service competing for attention. OSymbiote flips the priority: the agent's init script *is* PID 1. If it dies, the system dies — which forces it to be the thing that keeps everything else alive, not the other way around.
-
-**What exists today is Phase 1** — a proof-of-life build, not the full vision. See [BLUEPRINT.md](BLUEPRINT.md) for the long-term design (hybrid memory search, self-healing, multi-arch, bare-metal boot) — most of it is still unimplemented. This README only describes what currently runs.
-
----
-
-## Architecture (today)
-
-```
-┌─────────────────────────────────────────────────────┐
-│         /init  (PID 1, one shell script)             │
-│   mount fs → bring up network → spawn HTTP handler    │
-│   → supervise & restart the HTTP handler if it dies   │
-├─────────────────────────────────────────────────────┤
-│              Linux Kernel (Alpine virt)               │
-├─────────────────────────────────────────────────────┤
-│                    Hardware / QEMU                    │
-└─────────────────────────────────────────────────────┘
-```
-
-The README previously described this as four separate subsystems ("Cortex", "Nerve", "Immune", "Shell") running independently. In the current code there is one init script and one request handler — the route groupings below are the closest real mapping:
-
-- **Reasoning** — `/ai` and `/chat` proxy a prompt to an OpenAI-compatible LLM provider (OpenRouter by default). There is no on-box planning or autonomous decision-making yet.
-- **Sensing** — `/health`, `/hardware`, and `/intent` read `/proc` and `/sys` on request. There's no background watcher or event bus — everything is pull-based, polled by the UI.
-- **Healing** — the supervisor loop in `/init` restarts the HTTP handler if it dies. That's the entire self-healing story today.
-- **Acting** — the same HTTP handler executes BusyBox commands (`ps`, `df`, `free`, `ip`) via the `/intent` route.
-
-No systemd, no cron, no login manager — true today, same as the original claim.
-
----
-
-## What It Does Today (Phase 1 — Proof of Life)
-
-- **Boots to agent in a few seconds** on QEMU (x86_64)
-- **BusyBox userland** — ~40 coreutils symlinks, a custom `comb` memory script, a shell
-- **Networking** — DHCP via udhcpc on `eth0`/`ens0`/`enp0s3`
-- **Web UI** — single-file HTML/CSS/JS dashboard served at `/ui` (see API section)
-- **HTTP API** — a hand-rolled request handler built on BusyBox `nc`, not a real web server — it serves one request at a time, no concurrency
-- **Agent loop** — `/init` (PID 1) does hardware probing, network bring-up, then supervises the HTTP handler, restarting it if it exits
-- **~1MB initramfs** — the whole image is close to a megabyte
-
-### Boot Sequence
-
-```
-Power on → BIOS/UEFI → vmlinuz loads
-  → initramfs unpacks
-    → /init runs (PID 1 = the agent)
-      → mount proc, sys, dev, tmp, run
-      → bring up loopback + DHCP on the first available NIC
-      → write /run/hardware.json
-      → start the nc-based HTTP handler loop
-      → supervisor loop: restart the handler if it dies
-```
-
-### Known limitations (read before relying on this)
-
-- **Storage is not persistent.** `/data` (passwords, sessions, COMB memory entries) lives on the initramfs/tmpfs. A reboot wipes everything — there is no disk-backed mount anywhere in `/init`.
-- **The HTTP handler is single-connection.** It's a `while true; do nc -l ... ; done` loop — one request at a time, no timeout on a slow/stalled client, no real concurrency.
-- **"Architecture-aware" intent routing is cosmetic.** `/intent` detects `x86_64`/`arm64`/`riscv64`/`generic` and reports it in the response, but every intent runs the exact same BusyBox command regardless of arch family — there are no real per-arch adapters yet.
-- **No password recovery.** Once `/setup/init` runs, there's no way to reset the password short of wiping `/data` (which a reboot does anyway, today).
-- **`scripts/aegis-orchestrator.sh` is personal tooling**, not a general-purpose script — it hardcodes a specific device IP, username, and local filesystem path, and won't run for other contributors as-is.
-
----
-
-## Quick Start
-
-OSymbiote boots **inside a QEMU virtual machine**. The host (Linux, WSL2, or Termux on Android) never runs the agent directly — it hosts a VM that boots the agent as PID 1. This is the "boot-in environment": QEMU provides the virtual hardware, and OSymbiote boots into it like real hardware.
-
-### Prerequisites
-
-- QEMU (`qemu-system-x86_64`)
-- Linux host, WSL2, or **Termux on Android**
-- Internet connection (for the build step and for LLM calls)
-
-### Termux (Android)
-
-OSymbiote builds and runs fully inside Termux — no root required. The build script detects Termux automatically and installs what it needs via `pkg`:
-
-```bash
-pkg update -y && pkg upgrade -y
-pkg install -y git
-git clone <this-repo-url> osymbiote && cd osymbiote
-bash scripts/build-phase1.sh   # installs qemu-system-x86-64, wget, curl, coreutils, cpio, gzip via pkg
-./run.sh
-```
-
-`run.sh` also detects a missing `qemu-system-x86_64` on Termux and installs it via `pkg` automatically before booting.
-
-### Build
-
-```bash
-./scripts/build-phase1.sh
-```
-
-This downloads an Alpine Linux kernel + modules, fetches a static BusyBox, assembles the initramfs, and produces a bootable image (`build/vmlinuz` + `images/initramfs.cpio.gz`).
-
-### Run
-
-```bash
-./run.sh
-```
-
-Boots OSymbiote in QEMU with:
-- 128MB RAM, 2 CPUs (override with `OSYM_RAM` / `OSYM_CPUS`)
-- e1000 networking (DHCP via udhcpc inside the guest)
-- Port forwarding: host `18422` → guest `8422` (override with `OSYM_PORT`)
-- Serial console output (`-nographic`; `Ctrl+A X` to exit QEMU)
-- `./run.sh --background` boots detached and polls `/health` to confirm the agent is alive
-
-### Access
-
-- **Web UI:** `http://localhost:18422/ui`
-- **API:** `http://localhost:18422/health`
-- **Console:** QEMU serial output (stdio)
-
----
-
-## API
-
-The agent exposes a REST API on port `8422` (forwarded to host `18422` by default):
-
-| Endpoint | Description |
+| Capability | Status |
 |---|---|
-| `/ui` | Single-file setup/login UI plus a tabbed dashboard (Chat, System, Memory, Network, Processes) once authenticated |
-| `/setup/status` | First-boot setup status |
-| `/setup/init` (POST password body) | Initialize password (salted hash only) |
-| `/auth/login` (POST password body) | Login and receive short-lived session cookie |
-| `/auth/logout` | Clear session |
-| `/health` | Agent health, setup/auth status, and basic system metrics |
-| `/provider` | Active OpenAI-compatible provider settings |
-| `/hardware` | Hardware manifest |
-| `/chat` (POST body text) | Auth-required local chat response |
-| `/ai` (POST body text) | Auth-required OpenAI-compatible `/chat/completions` proxy |
-| `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
-| `/comb/stage` (POST body text) | Auth-required append memory entry |
-| `/comb/recall` | Auth-required read recent memory entries |
+| x86_64 initramfs build | Build script available; QEMU runtime support depends on host installation |
+| ARM64 QEMU `virt` image | Image builder and launcher available; boot has not been verified in this environment |
+| x86_64 ISO, disk, and USB images | Separate versioned artifacts can be packaged from the x86_64 build |
+| Vendor ARM boards and bare metal | Not implemented or certified |
+| Authenticated HTTP portal and API | Available; single shared portal identity |
+| LLM chat and tool proposals | Available for configured providers; write and command operations require an authenticated request and confirmation header |
+| Persistent guest data | Available when launched with the QEMU 9p share; other boot modes may be volatile |
 
-All responses are JSON with CORS headers.
+See [the support matrix](docs/architecture.md#supported-targets) and [roadmap](docs/roadmap.md) for scope and validation status.
 
-### Setup and auth flow
+## Quick start
 
-On a fresh boot, only setup routes are available. Initialize with `POST /setup/init`, then login via `POST /auth/login`.  
-Session auth uses a short-lived cookie (`osym_session`, 15 minutes). Sensitive routes enforce auth.
+### x86_64
 
-Auth hardening included:
-- rate limiting on setup/login endpoints
-- temporary lockout/backoff after repeated failed logins
-- password stored as salted SHA-256 hash (never plaintext)
+Requirements: Bash, `wget`, `gzip`, `cpio`, `unsquashfs` from `squashfs-tools`, and QEMU (`qemu-system-x86_64`) to run.
 
-### OpenAI-compatible provider defaults
-
-- Provider: `openrouter`
-- Base URL: `https://openrouter.ai/api/v1`
-- Model: `qwen/qwen-2.5-0.5b-instruct`
-
-`/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
-Pass your provider credentials via the HTTP `Authorization` header on the `/ai` request.
-
-To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
-`test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.
-
-### Architecture-aware intent routing
-
-`/intent` and `/command` map canonical intents (network, disk usage, process list, memory, uptime) to BusyBox commands, and the response reports a detected arch family: `x86_64`, `arm64`, `riscv64`, or `generic`.  
-Today this is capability detection, not real per-arch logic — every family runs the same BusyBox command. The arch field exists so future per-arch adapters have somewhere to plug in.
-
----
-
-## Roadmap
-
-| Phase | Milestone | Status |
-|---|---|---|
-| **1** | Proof of Life — boots, networks, serves HTTP API + UI, agent supervisor loop | ✅ Working (ephemeral, single-connection, see limitations above) |
-| **2** | Cortex Integration — LLM reasoning, tool use, autonomous decisions | 🔜 `/ai` and `/chat` exist as simple proxies; no planning/tool-use loop yet |
-| **3** | Nerve Layer — hardware sensors, filesystem watchers, event bus | Planned — today is poll-based, not event-driven |
-| **4** | Immune System — self-healing, process resurrection, resource management | Planned — today is a restart-if-dead loop for one process |
-| **5** | Persistent Memory — survives reboots, learns from history | Planned — COMB memory is tmpfs-only today, wiped on reboot |
-| **6** | Multi-Agent — spawn child agents, coordinate across machines | Planned — not started |
-| **7** | Bare Metal — real hardware boot, ARM64 support, GPU passthrough | Planned — only tested under QEMU x86_64 today |
-
----
-
-## Project Structure
-
-```
-osymbiote/
-├── BLUEPRINT.md              # Long-term technical vision (mostly unimplemented)
-├── README.md                 # This file
-├── LICENSE                   # MIT
-├── run.sh                    # Boot OSymbiote in QEMU (host-side launcher)
-├── boot.sh                   # Generated snapshot of build-phase1.sh's boot helper
-├── test.sh                   # Generated snapshot of build-phase1.sh's smoke test
-├── scripts/
-│   ├── build-phase1.sh       # The single source of truth: generates /init, the HTTP
-│   │                         #   handler, the UI, and the comb script, then builds the
-│   │                         #   initramfs + downloads the kernel
-│   └── aegis-orchestrator.sh # Personal deployment tooling (hardcoded host/path, not portable)
-├── build/                    # Build output (gitignored): assembled initramfs tree
-└── images/                   # Built kernel + initramfs images (gitignored)
+```sh
+bash scripts/build-phase1.sh
+./run.sh
 ```
 
-There is no `www/` directory and no `cgi-bin` — the UI, the HTTP route handler, and the `comb` memory tool are all generated inline as heredocs inside `scripts/build-phase1.sh` and written into the initramfs at build time.
+To also package a bootable ISO and raw disk/USB images, install the GRUB and `xorriso` host tools and run `bash scripts/package-images.sh x86_64`.
 
----
+### ARM64 QEMU `virt`
 
-## Design Philosophy
+Requirements: the build tools above and `qemu-system-aarch64` to run.
 
-**Minimalism is not a constraint — it's the architecture.** The whole initramfs is close to 1MB. Almost everything in it is BusyBox symlinks plus one handful of generated shell scripts.
+```sh
+bash scripts/build-arm64.sh
+./run-arm64.sh
+```
 
-**The agent is not a service.** It doesn't run _on_ the OS. Its init script _is_ PID 1. If that script's main loop dies, the restart supervisor brings the HTTP handler back — but if `/init` itself crashes, the whole VM goes down with it, same as any init process.
+The ARM64 image is a generic QEMU reference target, not a Raspberry Pi, Rockchip, i.MX, Jetson, Qualcomm, or ARM FVP image. Both launchers forward host port `8422` to guest port `8422` and share host `data/` with guest `/data` by default.
 
-**The agent talks to hardware through the normal Linux interfaces** — `/proc`, `/sys`, BusyBox utilities — not through custom syscalls. "Direct access" here means "no systemd/desktop layer in between," not "bypassing the kernel."
+The package script can also create ARM64 UEFI media when ARM64 GRUB EFI modules are installed; physical-board compatibility is not implied.
 
-**Network is the nervous system.** The agent's LLM-backed reasoning (`/ai`, `/chat`) needs outbound network access to an LLM provider. No network means no LLM response — the rest of the HTTP API still works offline.
+Open `http://localhost:8422/ui`. On first boot, initialize the portal password and then sign in. Configure an LLM provider and API key in the portal or through `osh`. For the complete setup, options, and security constraints, see the [Quick Start guide](docs/quickstart.md).
 
-**Few processes, not forty.** The initramfs doesn't start a desktop, cron, or systemd units. The process tree is: `/init`, the HTTP handler loop, and whatever one-shot command the agent is currently executing.
+## Security notice
 
----
+The portal uses HTTP without TLS and the guest console runs as root. The single portal password is not Unix account isolation. Root command execution and file writes are high-impact capabilities; confirmation is enforced by the API header but is not a substitute for an encrypted, trusted channel. Run only in a trusted environment, keep the forwarded port private, and do not expose the service to untrusted networks. Review [Security](docs/security.md) before configuring credentials or using native tools.
 
-## Contributing
+## Documentation
 
-OSymbiote is early-stage and opinionated. If you want to contribute:
+- [Documentation index](docs/README.md)
+- [Quick start](docs/quickstart.md)
+- [Architecture and support matrix](docs/architecture.md)
+- [HTTP API reference](docs/api-reference.md)
+- [Security model and operational guidance](docs/security.md)
+- [Operations and troubleshooting](docs/operations.md)
+- [Development and contribution guide](docs/development.md)
+- [Roadmap and platform support](docs/roadmap.md)
+- [Release and file-versioning policy](docs/versioning.md)
+- [Changelog](CHANGELOG.md)
+- [Long-term design blueprint](BLUEPRINT.md) (aspirational; not a description of shipped functionality)
 
-1. Read `BLUEPRINT.md` — it contains the full technical vision and design decisions
-2. Open an issue before starting work — alignment on direction matters
-3. Keep it minimal — if your change adds a dependency, it needs a very good reason
-4. Test with `./run.sh` — if it doesn't boot, it doesn't ship
+## Repository layout
 
----
+```text
+VERSION                         Canonical project version
+README.md                       Project overview and entry point
+CHANGELOG.md                    User-visible release history
+docs/                           User, developer, API, security, and operations docs
+scripts/build-phase1.sh         x86_64 image builder
+scripts/build-arm64.sh          ARM64 QEMU virt image builder
+scripts/package-images.sh       Versioned ISO, disk, and USB image packager
+scripts/overlay/                Guest init, shell, HTTP handler, UI, and shared library
+run.sh                          x86_64 QEMU launcher
+run-arm64.sh                    ARM64 QEMU virt launcher
+boot.sh, test.sh                Generated x86_64 helper scripts
+```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
----
-
-## Origin
-
-OSymbiote is built by [Artifact Virtual](https://artifactvirtual.com). Born from the conviction that AI agents deserve to own their hardware, not rent it.
-
-*Four processes. One soul. Any hardware.*
+OSymbiote is licensed under the [MIT License](LICENSE).
