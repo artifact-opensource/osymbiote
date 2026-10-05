@@ -4,7 +4,7 @@
 
 [![Versioning: SemVer](https://img.shields.io/badge/versioning-SemVer-blue)](docs/versioning.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Targets](https://img.shields.io/badge/QEMU-x86__64%20%7C%20ARM64-informational)](#supported-targets)
+[![Targets](https://img.shields.io/badge/QEMU-x86__64%20%7C%20ARM64-informational)](docs/architecture.md#supported-targets)
 
 OSymbiote boots a Linux kernel into a small BusyBox initramfs. Its PID 1 script initializes devices and networking, supervises the HTTP handler, and keeps the `osh` console shell available. An optional OpenAI-compatible provider supplies chat and bounded tool proposals. OSymbiote is an early-stage project; it is not a general-purpose desktop OS or a certified bare-metal distribution.
 

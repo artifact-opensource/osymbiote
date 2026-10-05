@@ -24,6 +24,7 @@ Build images:
 ```sh
 bash scripts/build-phase1.sh
 bash scripts/build-arm64.sh
+bash scripts/package-images.sh x86_64
 ```
 
 Available shell checks:
