@@ -35,7 +35,7 @@ The README previously described this as four separate subsystems ("Cortex", "Ner
 - **Reasoning** — `/ai` and `/chat` proxy a prompt to an OpenAI-compatible LLM provider (OpenRouter by default). There is no on-box planning or autonomous decision-making yet.
 - **Sensing** — `/health`, `/hardware`, and `/intent` read `/proc` and `/sys` on request. There's no background watcher or event bus — everything is pull-based, polled by the UI.
 - **Healing** — the supervisor loop in `/init` restarts the HTTP handler if it dies. That's the entire self-healing story today.
-- **Acting** — the same HTTP handler executes BusyBox commands (`ps`, `df`, `free`, `ip`) via the `/intent` route.
+- **Acting** — `/intent` runs a small set of read-only system queries; confirmed native tools can read files and propose file writes or root commands.
 
 No systemd, no cron, no login manager — true today, same as the original claim.
 
@@ -46,7 +46,8 @@ No systemd, no cron, no login manager — true today, same as the original claim
 - **Boots to agent in a few seconds** on QEMU (x86_64)
 - **BusyBox userland** — ~40 coreutils symlinks, a custom `comb` memory script, a shell
 - **Networking** — DHCP via udhcpc on `eth0`/`ens0`/`enp0s3`
-- **Boot shell (`osh`)** — the console drops into an interactive shell on boot (`help`, `status`, `chat`, `ask`, `llm …`, `prompt`, `history`, `memory`, `net`, `webpass`, `agent`, `doctor`); any other command runs as a normal BusyBox command. The agent LLM is configured from the shell with `llm preset|set|key|url|model|models|test`.
+- **Boot shell (`osh`)** — the console drops into an interactive shell on boot (`help`, `status`, `chat`, `ask`, `llm …`, `sysconfig`, `prompt`, `history`, `memory`, `net`, `webpass`, `agent`, `doctor`); any other command runs as a normal BusyBox command. LLM settings and system policy are configured from the shell.
+- **LLM tool use** — the portal offers file-read, file-write, and root-command tools. Each mutation requires a separate confirmation and server-side authorization.
 - **Web portal** — single-file HTML/CSS/JS portal at `http://localhost:8422/ui` with Chat, History, Prompt, LLM & Provider, Memory, System, Network, Processes and Account panes
 - **HTTP API** — a hand-rolled shell request handler, served per-connection by BusyBox `tcpsvd` (falls back to single-connection `nc -e` if `tcpsvd` is unavailable); not a real web server
 - **Agent loop** — `/init` (PID 1) does hardware probing, network bring-up, then supervises the HTTP handler, restarting it if it exits
@@ -68,7 +69,9 @@ Power on → BIOS/UEFI → vmlinuz loads
 ### Known limitations (read before relying on this)
 
 - **Storage is not persistent.** `/data` (passwords, sessions, COMB memory entries) lives on the initramfs/tmpfs. A reboot wipes everything — there is no disk-backed mount anywhere in `/init`.
-- **The HTTP handler is single-connection.** It's a `while true; do nc -l ... ; done` loop — one request at a time, no timeout on a slow/stalled client, no real concurrency.
+- **HTTP concurrency depends on BusyBox applets.** The preferred `tcpsvd` server creates one handler per connection; the `nc -lk` fallback varies by BusyBox build. Requests have bounded header/body timeouts and a 64 KiB body limit. If neither forking server is available, the final `nc -e` fallback is serial.
+- **Portal authorization is single-account.** The password creates one shared portal identity with one configured role; this is not multi-user Unix account isolation. Console commands run as root. Do not expose the portal to untrusted networks.
+- **Configuration remains RAM-backed.** The `.env` and system policy files are created under `/data/osymbiote`, which is volatile in the current initramfs build. Credentials and settings are lost on reboot unless a future persistent `/data` mount is added.
 - **"Architecture-aware" intent routing is cosmetic.** `/intent` detects `x86_64`/`arm64`/`riscv64`/`generic` and reports it in the response, but every intent runs the exact same BusyBox command regardless of arch family — there are no real per-arch adapters yet.
 - **No password recovery.** Once `/setup/init` runs, there's no way to reset the password short of wiping `/data` (which a reboot does anyway, today).
 - **`scripts/aegis-orchestrator.sh` is personal tooling**, not a general-purpose script — it hardcodes a specific device IP, username, and local filesystem path, and won't run for other contributors as-is.
@@ -150,6 +153,7 @@ The agent exposes a REST API on port `8422` (forwarded to host `8422` by default
 | `/history` (GET `?limit=N` / POST message / DELETE) | Auth-required conversation history |
 | `/memory` (GET `?limit=N` / POST text / DELETE), `/memory/stats` | Auth-required COMB memory (aliases of `/comb/*`) |
 | `/system/network`, `/system/processes`, `/system/disk`, `/system/memory` | Auth-required system views |
+| `/system/config` (GET / POST `key=value` lines) | Auth-required role policy and file-owner settings |
 | `/ai` (POST body text) | Auth-required OpenAI-compatible `/chat/completions` proxy |
 | `/intent` or `/command` (POST body text) | Auth-required intent routing to arch-aware command adapters |
 | `/comb/stage` (POST body text) | Auth-required append memory entry |
@@ -171,16 +175,36 @@ Auth hardening included:
 - temporary lockout/backoff after repeated failed logins
 - password stored as salted SHA-256 hash (never plaintext)
 
+### Secrets, settings, and roles
+
+The boot image contains examples only, never real credentials. At startup, the guest copies `/etc/osymbiote/.env.example` and `/etc/osymbiote/system.conf.example` into `/data/osymbiote/.env` and `/data/osymbiote/system.conf` when those files do not already exist. The `.env` file is set to mode `0600`; it uses raw `KEY=value` lines and is parsed using an allowlist, never sourced or evaluated. API keys set in the portal or with `llm key` are written there. The LLM endpoint only returns whether a key is set and a masked value.
+
+Supported secret keys include `OSYM_OPENAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GROQ_API_KEY`. Optional routing defaults are `OSYM_OPENAI_BASE_URL`, `OSYM_OPENAI_MODEL`, and `OSYM_AI_PROVIDER`; saved LLM settings take precedence over these defaults. A process environment value takes precedence over the corresponding `.env` value. Never commit real keys or bake them into a generated image.
+
+`system.conf` is separate from secrets. Its validated settings are:
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `web_role` | Role assigned to the one portal identity | `admin` |
+| `fs_read_role` | Minimum role for read-only system/file/config views | `viewer` |
+| `fs_write_role` | Minimum role for file writes | `admin` |
+| `exec_role` | Minimum role for root command execution | `root` |
+| `config_role` | Minimum role for changing system policy over HTTP | `root` |
+| `sudo_mode` | `confirm` requires explicit confirmation; `disabled` blocks web root commands | `confirm` |
+| `owner_uid`, `owner_gid` | Numeric ownership applied to files written through the portal | `0`, `0` |
+
+Roles are ordered `viewer < operator < admin < root`. Change settings on the console with `sysconfig show` and `sysconfig set <key> <value>`; `/system/config` supports authenticated reads and updates for identities meeting `config_role`. These role gates do not create Unix users, drop the handler's root privileges, or protect the console shell. The current single-password session design cannot assign different roles to different people.
+
 ### OpenAI-compatible provider defaults
 
-NIC drivers (`e1000`, `virtio_net`, `af_packet`) are pulled from Alpine's `initramfs-virt` at build time and loaded by init, since the Alpine virt kernel ships them as modules. The agent uses `nc -lk` so the portal's parallel requests are served concurrently.
+NIC drivers (`e1000`, `virtio_net`, `af_packet`) are pulled from Alpine's `initramfs-virt` at build time and loaded by init, since the Alpine virt kernel ships them as modules. The agent prefers BusyBox `tcpsvd` for per-connection handling, with `nc` fallbacks depending on applet support.
 
 - Provider: `openrouter`
 - Base URL: `https://openrouter.ai/api/v1`
 - Model: `openrouter/free`
 
 `/ai` forwards your request to `${base_url}/chat/completions` and uses the model above.  
-Set the API key via the portal (LLM & Provider), `POST /llm` with `api_key=...`, or `llm key <key>` in the shell; `/ai` also accepts an `Authorization` header override.
+Set the API key via the portal (LLM & Provider), `POST /llm` with `api_key=...`, or `llm key <key>` in the shell. These write the secret to `.env`, not the non-secret LLM settings file. `/ai` also accepts an `Authorization` header override.
 
 To smoke-test provider tool calls, send `X-Tool-Call-Test: 1` to `/ai`.  
 `test.sh` runs this tool-call check automatically when `OPENROUTER_AUTH_HEADER` is set.
@@ -196,8 +220,8 @@ Today this is capability detection, not real per-arch logic — every family run
 
 | Phase | Milestone | Status |
 |---|---|---|
-| **1** | Proof of Life — boots, networks, serves HTTP API + UI, agent supervisor loop | ✅ Working (ephemeral, single-connection, see limitations above) |
-| **2** | Cortex Integration — LLM reasoning, tool use, autonomous decisions | 🔜 `/ai` and `/chat` exist as simple proxies; no planning/tool-use loop yet |
+| **1** | Proof of Life — boots, networks, serves HTTP API + UI, agent supervisor loop | ✅ Working (ephemeral; see limitations above) |
+| **2** | Cortex Integration — LLM reasoning, tool use, autonomous decisions | 🟡 LLM chat and bounded, user-confirmed tool calls exist; no autonomous planning |
 | **3** | Nerve Layer — hardware sensors, filesystem watchers, event bus | Planned — today is poll-based, not event-driven |
 | **4** | Immune System — self-healing, process resurrection, resource management | Planned — today is a restart-if-dead loop for one process |
 | **5** | Persistent Memory — survives reboots, learns from history | Planned — COMB memory is tmpfs-only today, wiped on reboot |
@@ -218,8 +242,7 @@ osymbiote/
 ├── test.sh                   # Generated snapshot of build-phase1.sh's smoke test
 ├── scripts/
 │   ├── build-phase1.sh       # Downloads kernel + busybox and builds the initramfs
-│   ├── overlay/              # Files installed into the initramfs: init, osh (shell),
-│   │                         #   agent_handler.sh, lib.sh, ui.html, comb, udhcpc.sh
+│   ├── overlay/              # Guest sources, config examples and files installed into initramfs
 │   └── aegis-orchestrator.sh # Personal deployment tooling (hardcoded host/path, not portable)
 ├── build/                    # Build output (gitignored): assembled initramfs tree
 └── images/                   # Built kernel + initramfs images (gitignored)

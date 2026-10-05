@@ -132,7 +132,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
         <label>Base URL</label><input id="f_base_url" placeholder="https://openrouter.ai/api/v1">
         <label>API key <span class="mono" id="keyMask"></span></label><input id="f_api_key" type="password" autocomplete="off" placeholder="leave blank to keep current">
         <div class="grid"><div><label>Temperature</label><input id="f_temperature"></div><div><label>Max tokens</label><input id="f_max_tokens"></div><div><label>History turns</label><input id="f_history_turns"></div></div>
-        <div class="row"><button onclick="saveLlm()">Save</button><button class="sec" onclick="listModels()">List models</button><button class="sec" onclick="testLlm()">Test connection</button></div>
+        <div class="row"><button onclick="saveLlm()">Save</button><button class="sec" onclick="listModels()">List models</button><button class="sec" onclick="testLlm()">Test connection</button><button class="dang" onclick="clearApiKey()">Clear API keys</button></div>
         <h3>Result</h3><pre id="llmOut">—</pre></div></section>
 
       <section class="pane" id="p-memory"><div class="card">
@@ -149,7 +149,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
           <div class="stat"><div class="k">Memory</div><div class="v" id="sMem">—</div><div class="bar"><i id="sMemBar" style="width:0"></i></div></div>
           <div class="stat"><div class="k">Arch / Host</div><div class="v" id="sArch">—</div></div>
         </div>
-        <h3>Disk</h3><pre id="sDisk">…</pre><h3>Hardware manifest</h3><pre id="sHw">…</pre><h3>Provider</h3><pre id="sProv">…</pre></div></section>
+        <h3>Disk</h3><pre id="sDisk">…</pre><h3>Access policy</h3><p class="sub">Role gates apply to the single portal account. Change policy at the console with <span class="mono">sysconfig</span>.</p><pre id="sPolicy">…</pre><h3>Hardware manifest</h3><pre id="sHw">…</pre><h3>Provider</h3><pre id="sProv">…</pre></div></section>
 
       <section class="pane" id="p-network"><div class="card"><div class="row"><h2>Network</h2><button class="sec auto sm" onclick="loadNet()">Refresh</button></div><pre id="netOut">…</pre></div></section>
       <section class="pane" id="p-procs"><div class="card"><div class="row"><h2>Processes</h2><button class="sec auto sm" onclick="loadProcs()">Refresh</button></div><pre id="procOut">…</pre></div></section>
@@ -307,6 +307,7 @@ async function saveLlm(){
   const r=await api('/llm',{method:'POST',body:b});
   if(r.ok){toast('LLM settings saved');loadLlm()}else{toast('Rejected: '+(r.data.detail||r.data.error),true)}
 }
+async function clearApiKey(){if(!confirm('Remove all API keys stored in the guest .env file?'))return;const r=await api('/llm',{method:'POST',body:'api_key='});toast(r.ok?'API keys cleared':'Clear failed: '+(r.data.error||r.code),!r.ok);loadLlm()}
 async function applyPreset(){const p=$('llmPreset').value;if(!p)return;const r=await api('/llm',{method:'POST',body:'preset='+p});toast(r.ok?'Preset applied':'Preset failed',!r.ok);loadLlm()}
 async function testLlm(){$('llmOut').textContent='Testing…';const r=await api('/llm/test',{method:'POST',body:''});$('llmOut').textContent=r.ok?'OK: '+r.data.reply:'FAILED: '+(r.data.error||r.code);loadLlm()}
 async function listModels(){
@@ -331,6 +332,7 @@ async function loadSystem(){
   const hw=await api('/hardware');$('sHw').textContent=JSON.stringify(hw.data,null,2);if(hw.data)$('sArch').textContent=(hw.data.arch||'?')+' / '+(hw.data.hostname||'?');
   $('sProv').textContent=JSON.stringify((await api('/provider')).data,null,2);
   const d=await api('/system/disk');$('sDisk').textContent=d.data.output||JSON.stringify(d.data);
+  const p=await api('/system/config');$('sPolicy').textContent=JSON.stringify(p.data,null,2);
 }
 async function runShell(){
   const c=$('shIn').value.trim();if(!c)return;

@@ -109,6 +109,17 @@ enforce_auth() {
     return 0
 }
 
+require_role() {
+    if role_allows "$1"; then return 0; fi
+    STATUS="403 Forbidden"
+    RESP="{\"error\":\"insufficient_role\",\"required\":\"$1\"}"
+    return 1
+}
+
+require_policy_role() {
+    require_role "$(system_get "$1")"
+}
+
 check_rate_limit() {
     NOW="$(now_epoch)"
     SLOT=$((NOW / 60))
@@ -197,16 +208,19 @@ handle_auth_login() {
             if [ -z "$TOKEN_SRC" ] && [ -r /dev/urandom ]; then
                 TOKEN_SRC="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
             fi
-            [ -n "$TOKEN_SRC" ] || TOKEN_SRC="${NOW}-$$-$(cat /proc/uptime 2>/dev/null)"
-            TOKEN="$(printf '%s' "$TOKEN_SRC" | sha256sum | awk '{print $1}')"
-            _session_tmp="$SESSION_FILE.$$"
-            if printf '%s|%s\n' "$TOKEN" "$EXPIRES_AT" > "$_session_tmp" &&
-                chmod 600 "$_session_tmp" 2>/dev/null && mv "$_session_tmp" "$SESSION_FILE"; then
-                EXTRA_HEADERS="Set-Cookie: osym_session=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}\r\n"
-                RESP="{\"status\":\"ok\",\"expires_in\":$SESSION_TTL}"
+            if [ -z "$TOKEN_SRC" ]; then
+                STATUS="500 Internal Server Error"; RESP='{"error":"session_entropy_unavailable"}'
             else
-                rm -f "$_session_tmp"
-                STATUS="500 Internal Server Error"; RESP='{"error":"session_create_failed"}'
+                TOKEN="$(printf '%s' "$TOKEN_SRC" | sha256sum | awk '{print $1}')"
+                _session_tmp="$SESSION_FILE.$$"
+                if printf '%s|%s\n' "$TOKEN" "$EXPIRES_AT" > "$_session_tmp" &&
+                    chmod 600 "$_session_tmp" 2>/dev/null && mv "$_session_tmp" "$SESSION_FILE"; then
+                    EXTRA_HEADERS="Set-Cookie: osym_session=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}\r\n"
+                    RESP="{\"status\":\"ok\",\"expires_in\":$SESSION_TTL}"
+                else
+                    rm -f "$_session_tmp"
+                    STATUS="500 Internal Server Error"; RESP='{"error":"session_create_failed"}'
+                fi
             fi
         else
             record_auth_failure
@@ -257,8 +271,16 @@ stage_config_unset() {
 apply_llm_body() {
     lock_acquire config || { printf 'config_busy'; return; }
     _stage="$OSYM_DATA/config.stage.$$"
+    _envstage="$OSYM_DATA/env.stage.$$"
+    _envbackup="$OSYM_DATA/env.backup.$$"
     _body_file="$OSYM_DATA/config.body.$$"
     _errors="$OSYM_DATA/config.errors.$$"
+    _env_changed=0
+    _env_existed=0
+    _env_committed=0
+    _api_key_seen=0
+    _api_key_value=""
+    [ -f "$ENV_FILE" ] && _env_existed=1
     if [ -f "$CFG_FILE" ]; then
         cp "$CFG_FILE" "$_stage" 2>/dev/null || {
             lock_release; printf 'config_stage_failed'; return
@@ -266,8 +288,15 @@ apply_llm_body() {
     else
         : > "$_stage" || { lock_release; printf 'config_stage_failed'; return; }
     fi
+    if [ -f "$ENV_FILE" ]; then
+        cp "$ENV_FILE" "$_envstage" 2>/dev/null || {
+            rm -f "$_stage"; lock_release; printf 'config_stage_failed'; return
+        }
+    else
+        : > "$_envstage" || { rm -f "$_stage"; lock_release; printf 'config_stage_failed'; return; }
+    fi
     printf '%s\n' "$BODY" > "$_body_file" || {
-        rm -f "$_stage" "$_body_file"; lock_release; printf 'config_stage_failed'; return
+        rm -f "$_stage" "$_envstage" "$_body_file"; lock_release; printf 'config_stage_failed'; return
     }
     : > "$_errors"
     while IFS= read -r line || [ -n "$line" ]; do
@@ -288,7 +317,23 @@ apply_llm_body() {
                 *) printf 'bad_preset\n' >> "$_errors" ;;
             esac
         elif [ "$k" = "api_key" ] && [ -z "$v" ]; then
+            env_stage_clear_secrets "$_envstage" || printf 'config_stage_failed\n' >> "$_errors"
+            _env_changed=1
+            _api_key_seen=1
+            _api_key_value=""
             stage_config_unset "$_stage" api_key || printf 'config_stage_failed\n' >> "$_errors"
+        elif [ "$k" = "api_key" ]; then
+            cfg_validate "$k" "$v"
+            case $? in
+                0)
+                    env_stage_value "$_envstage" OSYM_OPENAI_API_KEY "$_val" || printf 'config_stage_failed\n' >> "$_errors"
+                    _env_changed=1
+                    _api_key_seen=1
+                    _api_key_value="$_val"
+                    stage_config_unset "$_stage" api_key || printf 'config_stage_failed\n' >> "$_errors"
+                    ;;
+                *) printf 'invalid_value:api_key\n' >> "$_errors" ;;
+            esac
         else
             cfg_validate "$k" "$v"
             case $? in
@@ -299,8 +344,70 @@ apply_llm_body() {
         fi
     done < "$_body_file"
     if [ ! -s "$_errors" ]; then
-        if ! chmod 600 "$_stage" 2>/dev/null || ! mv "$_stage" "$CFG_FILE"; then
+        if ! chmod 600 "$_stage" 2>/dev/null; then
             printf 'config_commit_failed\n' >> "$_errors"
+        fi
+    fi
+    if [ ! -s "$_errors" ] && [ "$_env_changed" -eq 1 ]; then
+        if [ -f "$ENV_FILE" ]; then
+            cp "$ENV_FILE" "$_envbackup" 2>/dev/null || printf 'config_backup_failed\n' >> "$_errors"
+        fi
+        chmod 600 "$_envstage" 2>/dev/null || printf 'config_commit_failed\n' >> "$_errors"
+        if [ ! -s "$_errors" ] && ! mv "$_envstage" "$ENV_FILE"; then
+            printf 'config_commit_failed\n' >> "$_errors"
+        elif [ ! -s "$_errors" ]; then
+            _env_committed=1
+        fi
+    fi
+    if [ ! -s "$_errors" ] && ! mv "$_stage" "$CFG_FILE"; then
+        printf 'config_commit_failed\n' >> "$_errors"
+    fi
+    if [ -s "$_errors" ] && [ "$_env_committed" -eq 1 ] && [ -f "$_envbackup" ]; then
+        mv "$_envbackup" "$ENV_FILE" 2>/dev/null || true
+    elif [ -s "$_errors" ] && [ "$_env_committed" -eq 1 ] && [ "$_env_existed" -eq 0 ]; then
+        rm -f "$ENV_FILE"
+    fi
+    if [ ! -s "$_errors" ] && [ "$_api_key_seen" -eq 1 ]; then
+        if [ -n "$_api_key_value" ]; then export "OSYM_OPENAI_API_KEY=$_api_key_value"
+        else unset OSYM_OPENAI_API_KEY
+        fi
+    fi
+    cat "$_errors"
+    rm -f "$_stage" "$_stage.next" "$_envstage" "$_envstage.next" "$_envbackup" "$_body_file" "$_errors"
+    lock_release
+}
+
+apply_system_body() {
+    lock_acquire system || { printf 'system_config_busy'; return; }
+    _stage="$SYSTEM_CONFIG_FILE.stage.$$"
+    _body_file="$OSYM_DATA/system.body.$$"
+    _errors="$OSYM_DATA/system.errors.$$"
+    if [ -f "$SYSTEM_CONFIG_FILE" ]; then
+        cp "$SYSTEM_CONFIG_FILE" "$_stage" 2>/dev/null || {
+            lock_release; printf 'system_config_stage_failed'; return
+        }
+    else
+        : > "$_stage" || { lock_release; printf 'system_config_stage_failed'; return; }
+    fi
+    printf '%s\n' "$BODY" > "$_body_file" || {
+        rm -f "$_stage" "$_body_file"; lock_release; printf 'system_config_stage_failed'; return
+    }
+    : > "$_errors"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        k="${line%%=*}"
+        v="${line#*=}"
+        [ "$k" != "$line" ] || { printf 'bad_line\n' >> "$_errors"; continue; }
+        system_validate "$k" "$v"
+        case $? in
+            0) stage_config_value "$_stage" "$k" "$v" || printf 'system_config_stage_failed\n' >> "$_errors" ;;
+            1) printf 'unknown_key:%s\n' "$k" >> "$_errors" ;;
+            *) printf 'invalid_value:%s\n' "$k" >> "$_errors" ;;
+        esac
+    done < "$_body_file"
+    if [ ! -s "$_errors" ]; then
+        if ! chmod 600 "$_stage" 2>/dev/null || ! mv "$_stage" "$SYSTEM_CONFIG_FILE"; then
+            printf 'system_config_commit_failed\n' >> "$_errors"
         fi
     fi
     cat "$_errors"
@@ -402,21 +509,28 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             ;;
         /llm)
             if enforce_auth; then
-                if [ "$METHOD" = "POST" ]; then
-                    ERRS="$(apply_llm_body)"
-                    if [ -n "$ERRS" ]; then
-                        STATUS="400 Bad Request"
-                        RESP="{\"error\":\"invalid_config\",\"detail\":\"$(json_escape "$ERRS")\"}"
-                    else
-                        RESP="$(llm_json)"
-                    fi
-                else
-                    RESP="$(llm_json)"
-                fi
+                case "$METHOD" in
+                    POST)
+                        if require_role admin; then
+                            ERRS="$(apply_llm_body)"
+                            if [ -n "$ERRS" ]; then
+                                STATUS="400 Bad Request"
+                                RESP="{\"error\":\"invalid_config\",\"detail\":\"$(json_escape "$ERRS")\"}"
+                            else
+                                RESP="$(llm_json)"
+                            fi
+                        fi ;;
+                    GET)
+                        if require_policy_role fs_read_role; then
+                            RESP="$(llm_json)"
+                        fi ;;
+                    *)
+                        STATUS="405 Method Not Allowed"; RESP='{"error":"use GET or POST"}' ;;
+                esac
             fi
             ;;
         /llm/test)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_role operator && need_post; then
                 if llm_chat "${BODY:-Reply with the single word: pong}"; then
                     RESP="{\"ok\":true,\"reply\":\"$LLM_REPLY\"}"
                 else
@@ -426,7 +540,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /llm/models)
-            if enforce_auth; then
+            if enforce_auth && require_role operator; then
                 if [ -z "$(cfg_get api_key)" ]; then
                     STATUS="400 Bad Request"; RESP='{"error":"no_api_key"}'
                 else
@@ -436,7 +550,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /agent/tools)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_role operator && need_post; then
                 if [ -z "$(cfg_get api_key)" ]; then
                     STATUS="400 Bad Request"; RESP='{"error":"no_api_key"}'
                 elif [ "${BODY#\[}" = "$BODY" ] || [ "${BODY%\]}" = "$BODY" ] || [ "$BODY" = "[]" ]; then
@@ -450,21 +564,34 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
         /prompt)
             if enforce_auth; then
                 case "$METHOD" in
-                    POST) prompt_set "$BODY" ;;
-                    DELETE) prompt_reset ;;
+                    POST)
+                        if require_role admin; then prompt_set "$BODY"; fi ;;
+                    DELETE)
+                        if require_role admin; then prompt_reset; fi ;;
+                    *)
+                        STATUS="405 Method Not Allowed"; RESP='{"error":"use GET, POST, or DELETE"}' ;;
                 esac
-                RESP="{\"prompt\":\"$(json_escape "$(prompt_get)")\",\"default\":$([ -s "$PROMPT_FILE" ] && echo false || echo true)}"
+                if [ "$STATUS" = "200 OK" ]; then
+                    case "$METHOD" in
+                        GET)
+                            if require_policy_role fs_read_role; then
+                                RESP="{\"prompt\":\"$(json_escape "$(prompt_get)")\",\"default\":$([ -s "$PROMPT_FILE" ] && echo false || echo true)}"
+                            fi ;;
+                        *)
+                            RESP="{\"prompt\":\"$(json_escape "$(prompt_get)")\",\"default\":$([ -s "$PROMPT_FILE" ] && echo false || echo true)}" ;;
+                    esac
+                fi
             fi
             ;;
         /history)
             if enforce_auth; then
                 if [ "$METHOD" = "DELETE" ]; then
-                    history_clear
-                    RESP='{"status":"cleared"}'
+                    if require_role admin; then history_clear; RESP='{"status":"cleared"}'; fi
                 elif [ "$METHOD" = "POST" ]; then
-                    case "$HISTORY_ROLE_HEADER" in user|assistant) ;;
+                    if ! require_role operator; then :
+                    else case "$HISTORY_ROLE_HEADER" in user|assistant) ;;
                         *) STATUS="400 Bad Request"; RESP='{"error":"invalid_history_role"}' ;;
-                    esac
+                    esac; fi
                     if [ "$STATUS" = "200 OK" ]; then
                         if lock_acquire history; then
                             history_add "$HISTORY_ROLE_HEADER" "$(json_escape "$BODY")"
@@ -475,8 +602,10 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                         fi
                     fi
                 else
-                    LIMIT="$(printf '%s' "$QUERY" | sed -n 's/.*limit=\([0-9]\{1,4\}\).*/\1/p')"
-                    RESP="$(history_json "${LIMIT:-100}")"
+                    if require_policy_role fs_read_role; then
+                        LIMIT="$(printf '%s' "$QUERY" | sed -n 's/.*limit=\([0-9]\{1,4\}\).*/\1/p')"
+                        RESP="$(history_json "${LIMIT:-100}")"
+                    fi
                 fi
             fi
             ;;
@@ -484,28 +613,32 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             if enforce_auth; then
                 case "$METHOD" in
                     POST)
-                        if [ -n "$BODY" ]; then "$OSYM_COMB" stage "$BODY"; RESP='{"status":"staged"}'
+                        if ! require_role admin; then :
+                        elif [ -n "$BODY" ]; then "$OSYM_COMB" stage "$BODY"; RESP='{"status":"staged"}'
                         else STATUS="400 Bad Request"; RESP='{"error":"no body"}'; fi
                         ;;
-                    DELETE) "$OSYM_COMB" clear; RESP='{"status":"cleared"}' ;;
+                    DELETE)
+                        if require_role admin; then "$OSYM_COMB" clear; RESP='{"status":"cleared"}'; fi ;;
                     *)
-                        MEM_LINES="$("$OSYM_COMB" recall "${QUERY##*limit=}" 2>/dev/null | sed 's/$/,/' | tr -d '\n' | sed 's/,$//')"
-                        RESP="[$MEM_LINES]"
+                        if require_policy_role fs_read_role; then
+                            MEM_LINES="$("$OSYM_COMB" recall "${QUERY##*limit=}" 2>/dev/null | sed 's/$/,/' | tr -d '\n' | sed 's/,$//')"
+                            RESP="[$MEM_LINES]"
+                        fi
                         ;;
                 esac
             fi
             ;;
         /comb/stage)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_role admin && need_post; then
                 if [ -n "$BODY" ]; then "$OSYM_COMB" stage "$BODY"; RESP='{"status":"staged"}'
                 else RESP='{"error":"no body"}'; fi
             fi
             ;;
         /comb/stats|/memory/stats)
-            if enforce_auth; then RESP="$("$OSYM_COMB" stats)"; fi
+            if enforce_auth && require_policy_role fs_read_role; then RESP="$("$OSYM_COMB" stats)"; fi
             ;;
         /chat)
-            if enforce_auth; then
+            if enforce_auth && require_role operator; then
                 if [ -z "$BODY" ]; then
                     RESP='{"error":"send POST with message body"}'
                 elif llm_chat "$BODY"; then
@@ -523,13 +656,13 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /intent|/command)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_policy_role fs_read_role && need_post; then
                 if [ -z "$BODY" ]; then STATUS="400 Bad Request"; RESP='{"error":"missing_intent"}'
                 else run_intent; fi
             fi
             ;;
         /ai)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_role operator && need_post; then
                 KEY_HDR="$AUTH_HEADER"
                 [ -n "$KEY_HDR" ] || { [ -n "$(cfg_get api_key)" ] && KEY_HDR="Bearer $(cfg_get api_key)"; }
                 if [ -z "$KEY_HDR" ]; then
@@ -557,9 +690,11 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /exec)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_policy_role exec_role && need_post; then
                 if [ -z "$BODY" ]; then
                     STATUS="400 Bad Request"; RESP='{"error":"missing_command"}'
+                elif [ "$(system_get sudo_mode)" = "disabled" ]; then
+                    STATUS="403 Forbidden"; RESP='{"error":"root_execution_disabled"}'
                 elif [ "$TOOL_CONFIRMED_HEADER" != "yes" ]; then
                     STATUS="428 Precondition Required"
                     RESP='{"error":"user_confirmation_required","hint":"confirm this root command in the portal"}'
@@ -570,7 +705,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /fs/read)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_policy_role fs_read_role && need_post; then
                 case "$TOOL_PATH_HEADER" in
                     /*) ;;
                     *) STATUS="400 Bad Request"; RESP='{"error":"absolute_path_required"}' ;;
@@ -601,7 +736,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /fs/write)
-            if enforce_auth && need_post; then
+            if enforce_auth && require_policy_role fs_write_role && need_post; then
                 if [ "$TOOL_CONFIRMED_HEADER" != "yes" ]; then
                     STATUS="428 Precondition Required"
                     RESP='{"error":"user_confirmation_required","hint":"confirm this file write in the portal"}'
@@ -630,7 +765,9 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                                 else
                                     TOOL_MODE=600
                                 fi
-                                if chmod "$TOOL_MODE" "$TOOL_TMP" 2>/dev/null && mv "$TOOL_TMP" "$TOOL_PATH_HEADER"; then
+                                if chmod "$TOOL_MODE" "$TOOL_TMP" 2>/dev/null &&
+                                    chown "$(system_get owner_uid):$(system_get owner_gid)" "$TOOL_TMP" 2>/dev/null &&
+                                    mv "$TOOL_TMP" "$TOOL_PATH_HEADER"; then
                                     RESP="{\"status\":\"written\",\"path\":\"$(json_escape "$TOOL_PATH_HEADER")\",\"bytes\":$CONTENT_LENGTH}"
                                 else
                                     rm -f "$TOOL_TMP"
@@ -643,7 +780,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             fi
             ;;
         /system/network|/system/processes|/system/disk|/system/memory)
-            if enforce_auth; then
+            if enforce_auth && require_policy_role fs_read_role; then
                 case "$PATH_ONLY" in
                     */network) BODY="show network" ;;
                     */processes) BODY="process list" ;;
@@ -653,9 +790,31 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                 run_intent
             fi
             ;;
+        /system/config)
+            if enforce_auth; then
+                case "$METHOD" in
+                    POST)
+                        if require_policy_role config_role; then
+                            ERRS="$(apply_system_body)"
+                            if [ -n "$ERRS" ]; then
+                                STATUS="400 Bad Request"
+                                RESP="{\"error\":\"invalid_system_config\",\"detail\":\"$(json_escape "$ERRS")\"}"
+                            else
+                                RESP="$(system_config_json)"
+                            fi
+                        fi ;;
+                    GET)
+                        if require_policy_role fs_read_role; then
+                            RESP="$(system_config_json)"
+                        fi
+                        ;;
+                    *) STATUS="405 Method Not Allowed"; RESP='{"error":"use GET or POST"}' ;;
+                esac
+            fi
+            ;;
         *)
             STATUS="404 Not Found"
-            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/agent/tools","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/fs/read","/fs/write","/system/network","/system/processes","/system/disk","/system/memory"]}'
+            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/agent/tools","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/fs/read","/fs/write","/system/config","/system/network","/system/processes","/system/disk","/system/memory"]}'
             ;;
     esac
 fi

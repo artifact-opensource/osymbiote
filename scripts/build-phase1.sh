@@ -219,7 +219,7 @@ echo "  NIC modules: $(ls "$INITRD/lib/modules" | tr '\n' ' ')"
 
 # ── Install OS overlay (init, shell, agent, UI, libs) ──
 OVERLAY="$SCRIPT_DIR/overlay"
-mkdir -p "$INITRD/usr/lib/osym" "$INITRD/usr/share/osym" "$INITRD/root"
+mkdir -p "$INITRD/usr/lib/osym" "$INITRD/usr/share/osym" "$INITRD/root" "$INITRD/etc/osymbiote"
 install -m 0755 "$OVERLAY/init" "$INITRD/init"
 install -m 0755 "$OVERLAY/osh" "$INITRD/bin/osh"
 install -m 0755 "$OVERLAY/comb" "$INITRD/bin/comb"
@@ -227,6 +227,8 @@ install -m 0755 "$OVERLAY/udhcpc.sh" "$INITRD/etc/udhcpc.sh"
 install -m 0755 "$OVERLAY/agent_handler.sh" "$INITRD/usr/lib/osym/agent_handler.sh"
 install -m 0644 "$OVERLAY/lib.sh" "$INITRD/usr/lib/osym/lib.sh"
 install -m 0644 "$OVERLAY/ui.html" "$INITRD/usr/share/osym/ui.html"
+install -m 0644 "$OVERLAY/osymbiote.env.example" "$INITRD/etc/osymbiote/.env.example"
+install -m 0644 "$OVERLAY/system.conf.example" "$INITRD/etc/osymbiote/system.conf.example"
 
 # ── /etc basics ──
 echo "osymbiote" > "$INITRD/etc/hostname"
@@ -354,6 +356,8 @@ echo ""
 AUTH_COOKIE="Cookie: osym_session=$COOKIE"
 
 call "Health (authed)" -H "$AUTH_COOKIE" "$BASE_URL/health"
+call "System config (authed)" -H "$AUTH_COOKIE" "$BASE_URL/system/config"
+call_expect_code "File write requires confirmation" "428" -H "$AUTH_COOKIE" -X POST "$BASE_URL/fs/write"
 call "Provider" "$BASE_URL/provider"
 call "Hardware" "$BASE_URL/hardware"
 call "Chat (authed)" -H "$AUTH_COOKIE" -X POST -d "Hello, are you alive?" "$BASE_URL/chat"

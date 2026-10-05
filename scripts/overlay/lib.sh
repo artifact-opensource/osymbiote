@@ -4,6 +4,8 @@
 OSYM_DATA="${OSYM_DATA:-/data/osymbiote}"
 OSYM_COMB="${OSYM_COMB:-/bin/comb}"
 CFG_FILE="$OSYM_DATA/config"
+ENV_FILE="${OSYM_ENV_FILE:-$OSYM_DATA/.env}"
+SYSTEM_CONFIG_FILE="${OSYM_SYSTEM_CONFIG_FILE:-$OSYM_DATA/system.conf}"
 HIST_FILE="$OSYM_DATA/history.jsonl"
 PROMPT_FILE="$OSYM_DATA/system_prompt"
 AUTH_DIR="$OSYM_DATA/auth"
@@ -14,6 +16,94 @@ mkdir -p "$AUTH_DIR" 2>/dev/null
 
 DEFAULT_SYSTEM_PROMPT="You are OSymbiote, an AI agent that is the operating system of this machine. Be concise, accurate and helpful."
 CFG_KEYS="provider base_url model api_key temperature max_tokens history_turns"
+SYSTEM_CONFIG_KEYS="web_role fs_read_role fs_write_role exec_role config_role sudo_mode owner_uid owner_gid"
+
+env_key_valid() {
+    case "$1" in
+        OSYM_OPENAI_API_KEY|OSYM_OPENAI_BASE_URL|OSYM_OPENAI_MODEL|OSYM_AI_PROVIDER|\
+        OPENAI_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GROQ_API_KEY) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+env_load() {
+    [ -r "$ENV_FILE" ] || return 0
+    [ "${OSYM_OPENAI_API_KEY+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_API_KEY)"; [ -z "$_v" ] || export "OSYM_OPENAI_API_KEY=$_v"; }
+    [ "${OSYM_OPENAI_BASE_URL+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_BASE_URL)"; [ -z "$_v" ] || export "OSYM_OPENAI_BASE_URL=$_v"; }
+    [ "${OSYM_OPENAI_MODEL+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_MODEL)"; [ -z "$_v" ] || export "OSYM_OPENAI_MODEL=$_v"; }
+    [ "${OSYM_AI_PROVIDER+x}" = x ] || { _v="$(env_file_get OSYM_AI_PROVIDER)"; [ -z "$_v" ] || export "OSYM_AI_PROVIDER=$_v"; }
+    [ "${OPENAI_API_KEY+x}" = x ] || { _v="$(env_file_get OPENAI_API_KEY)"; [ -z "$_v" ] || export "OPENAI_API_KEY=$_v"; }
+    [ "${OPENROUTER_API_KEY+x}" = x ] || { _v="$(env_file_get OPENROUTER_API_KEY)"; [ -z "$_v" ] || export "OPENROUTER_API_KEY=$_v"; }
+    [ "${ANTHROPIC_API_KEY+x}" = x ] || { _v="$(env_file_get ANTHROPIC_API_KEY)"; [ -z "$_v" ] || export "ANTHROPIC_API_KEY=$_v"; }
+    [ "${GEMINI_API_KEY+x}" = x ] || { _v="$(env_file_get GEMINI_API_KEY)"; [ -z "$_v" ] || export "GEMINI_API_KEY=$_v"; }
+    [ "${GROQ_API_KEY+x}" = x ] || { _v="$(env_file_get GROQ_API_KEY)"; [ -z "$_v" ] || export "GROQ_API_KEY=$_v"; }
+}
+
+env_file_get() {
+    env_key_valid "$1" || return 1
+    awk -v key="$1" 'index($0, "=") && substr($0, 1, index($0, "=") - 1) == key { value = substr($0, index($0, "=") + 1) } END { if (value != "") print value }' "$ENV_FILE" 2>/dev/null
+}
+
+env_stage_value() {
+    _env_file="$1"; _env_key="$2"; _env_value="$3"
+    env_key_valid "$_env_key" || return 1
+    grep -v "^$_env_key=" "$_env_file" > "$_env_file.next" || [ "$?" -eq 1 ] || return 1
+    printf '%s=%s\n' "$_env_key" "$_env_value" >> "$_env_file.next" || return 1
+    mv "$_env_file.next" "$_env_file"
+}
+
+env_stage_unset() {
+    _env_file="$1"; _env_key="$2"
+    env_key_valid "$_env_key" || return 1
+    grep -v "^$_env_key=" "$_env_file" > "$_env_file.next" || [ "$?" -eq 1 ] || return 1
+    mv "$_env_file.next" "$_env_file"
+}
+
+env_stage_clear_secrets() {
+    for _env_key in OSYM_OPENAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY \
+        ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY; do
+        env_stage_unset "$1" "$_env_key" || return 1
+    done
+}
+
+env_set() {
+    cfg_validate api_key "$2" || return 2
+    lock_acquire config || return 3
+    mkdir -p "$OSYM_DATA" || { lock_release; return 3; }
+    [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
+    _tmp="$ENV_FILE.$$"
+    if ! cp "$ENV_FILE" "$_tmp" || ! env_stage_value "$_tmp" OSYM_OPENAI_API_KEY "$_val" || ! chmod 600 "$_tmp" || ! mv "$_tmp" "$ENV_FILE"; then
+        rm -f "$_tmp" "$_tmp.next"
+        lock_release
+        return 3
+    fi
+    export "OSYM_OPENAI_API_KEY=$_val"
+    lock_release
+}
+
+env_unset() {
+    lock_acquire config || return 2
+    if [ -f "$ENV_FILE" ]; then
+        _tmp="$ENV_FILE.$$"
+        if ! cp "$ENV_FILE" "$_tmp" || ! env_stage_clear_secrets "$_tmp"; then
+            rm -f "$_tmp" "$_tmp.next"
+            lock_release
+            return 2
+        fi
+        chmod 600 "$_tmp" 2>/dev/null
+        mv "$_tmp" "$ENV_FILE" || { rm -f "$_tmp"; lock_release; return 2; }
+    fi
+    unset OSYM_OPENAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY
+    if [ -f "$CFG_FILE" ]; then
+        _tmp="$CFG_FILE.$$"
+        grep -v '^api_key=' "$CFG_FILE" > "$_tmp" || true
+        chmod 600 "$_tmp" 2>/dev/null
+        mv "$_tmp" "$CFG_FILE" || { rm -f "$_tmp"; lock_release; return 2; }
+    fi
+    lock_release
+}
+
+env_load
 
 json_escape() {
     printf '%s' "$1" | od -An -v -tu1 | LC_ALL=C awk '{
@@ -53,8 +143,26 @@ provider_default() {
 }
 
 cfg_get() {
-    _v="$(grep "^$1=" "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
+    case "$1" in
+        api_key)
+            _v="${OSYM_OPENAI_API_KEY:-}"
+            [ -n "$_v" ] || _v="${OPENAI_API_KEY:-}"
+            [ -n "$_v" ] || _v="$(env_file_get OSYM_OPENAI_API_KEY)"
+            [ -n "$_v" ] || _v="$(env_file_get OPENAI_API_KEY)"
+            case "$(cfg_get provider)" in
+                openrouter) _v="${_v:-${OPENROUTER_API_KEY:-$(env_file_get OPENROUTER_API_KEY)}}" ;;
+                anthropic) _v="${_v:-${ANTHROPIC_API_KEY:-$(env_file_get ANTHROPIC_API_KEY)}}" ;;
+                gemini) _v="${_v:-${GEMINI_API_KEY:-$(env_file_get GEMINI_API_KEY)}}" ;;
+                groq) _v="${_v:-${GROQ_API_KEY:-$(env_file_get GROQ_API_KEY)}}" ;;
+            esac
+            [ -n "$_v" ] || _v="$(grep '^api_key=' "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
+            ;;
+        *) _v="$(grep "^$1=" "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)" ;;
+    esac
     [ -n "$_v" ] || _v="$(provider_default "$1")"
+    if [ -n "$_v" ]; then
+        cfg_validate "$1" "$_v" >/dev/null 2>&1 || _v=""
+    fi
     case "$1" in
         model) case "$_v" in openrouter/openrouter/*) _v="${_v#openrouter/}" ;; esac ;;
     esac
@@ -101,8 +209,15 @@ cfg_validate() {
     cfg_key_valid "$1" || return 1
     _val="$(printf '%s' "$2" | tr -d '\r\n')"
     case "$1" in
-        temperature) printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]*)(\.[0-9]+)?$' || return 2 ;;
-        max_tokens|history_turns) printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]{0,4})$' || return 2 ;;
+        temperature)
+            printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]*)(\.[0-9]+)?$' || return 2
+            awk -v value="$_val" 'BEGIN { exit !(value >= 0 && value <= 2) }' || return 2 ;;
+        max_tokens)
+            printf '%s' "$_val" | grep -Eq '^[1-9][0-9]{0,4}$' || return 2
+            [ "$_val" -le 65535 ] || return 2 ;;
+        history_turns)
+            printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]{0,2})$' || return 2
+            [ "$_val" -le 100 ] || return 2 ;;
         base_url) printf '%s' "$_val" | grep -Eq '^https?://[^ "]+$' || return 2 ;;
         model|provider) printf '%s' "$_val" | grep -Eq '^[A-Za-z0-9._:/@+-]+$' || return 2 ;;
         api_key) printf '%s' "$_val" | grep -Eq '^[^ "\\]+$' || return 2 ;;
@@ -112,6 +227,7 @@ cfg_validate() {
 
 cfg_set() {
     cfg_validate "$1" "$2" || return $?
+    [ "$1" != api_key ] || { env_set api_key "$2"; return $?; }
     lock_acquire config || return 3
     mkdir -p "$OSYM_DATA"
     _tmp="$CFG_FILE.$$"
@@ -129,6 +245,7 @@ cfg_set() {
 
 cfg_unset() {
     cfg_key_valid "$1" || return 1
+    [ "$1" != api_key ] || { env_unset; return $?; }
     lock_acquire config || return 2
     if [ ! -f "$CFG_FILE" ]; then lock_release; return 0; fi
     _tmp="$CFG_FILE.$$"
@@ -141,6 +258,68 @@ cfg_unset() {
     rm -f "$_tmp"
     lock_release
     return 2
+}
+
+system_default() {
+    case "$1" in
+        web_role) printf admin ;;
+        fs_read_role) printf viewer ;;
+        fs_write_role) printf admin ;;
+        exec_role) printf root ;;
+        config_role) printf root ;;
+        sudo_mode) printf confirm ;;
+        owner_uid|owner_gid) printf 0 ;;
+        *) printf '' ;;
+    esac
+}
+
+system_get() {
+    case " $SYSTEM_CONFIG_KEYS " in *" $1 "*) ;; *) return 1 ;; esac
+    _v="$(grep "^$1=" "$SYSTEM_CONFIG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
+    if [ -n "$_v" ]; then system_validate "$1" "$_v" || _v=""; fi
+    [ -n "$_v" ] || _v="$(system_default "$1")"
+    printf '%s' "$_v"
+}
+
+role_rank() {
+    case "$1" in viewer) printf 1 ;; operator) printf 2 ;; admin) printf 3 ;; root) printf 4 ;; *) printf 0 ;; esac
+}
+
+role_allows() {
+    [ "$(role_rank "$(system_get web_role)")" -ge "$(role_rank "$1")" ]
+}
+
+system_validate() {
+    case " $SYSTEM_CONFIG_KEYS " in *" $1 "*) ;; *) return 1 ;; esac
+    case "$1" in
+        web_role|fs_read_role|fs_write_role|exec_role|config_role)
+            case "$2" in viewer|operator|admin|root) return 0 ;; *) return 2 ;; esac ;;
+        sudo_mode) case "$2" in confirm|disabled) return 0 ;; *) return 2 ;; esac ;;
+        owner_uid|owner_gid)
+            case "$2" in ''|*[!0-9]*|0[0-9]*) return 2 ;; esac
+            [ "${#2}" -le 5 ] && [ "$2" -le 65535 ] || return 2 ;;
+    esac
+}
+
+system_set() {
+    system_validate "$1" "$2" || return $?
+    lock_acquire system || return 3
+    mkdir -p "$OSYM_DATA" || { lock_release; return 3; }
+    _tmp="$SYSTEM_CONFIG_FILE.$$"
+    grep -v "^$1=" "$SYSTEM_CONFIG_FILE" 2>/dev/null > "$_tmp" || true
+    printf '%s=%s\n' "$1" "$2" >> "$_tmp"
+    chmod 600 "$_tmp" 2>/dev/null
+    if mv "$_tmp" "$SYSTEM_CONFIG_FILE"; then lock_release; return 0; fi
+    rm -f "$_tmp"
+    lock_release
+    return 3
+}
+
+system_config_json() {
+    printf '{"web_role":"%s","fs_read_role":"%s","fs_write_role":"%s","exec_role":"%s","config_role":"%s","sudo_mode":"%s","owner_uid":%s,"owner_gid":%s}' \
+        "$(system_get web_role)" "$(system_get fs_read_role)" "$(system_get fs_write_role)" \
+        "$(system_get exec_role)" "$(system_get config_role)" "$(system_get sudo_mode)" \
+        "$(system_get owner_uid)" "$(system_get owner_gid)"
 }
 
 mask_key() {

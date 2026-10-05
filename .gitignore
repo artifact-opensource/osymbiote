@@ -15,6 +15,10 @@ images/initramfs.cpio.gz
 
 # OS
 .DS_Store
+.env
+.env.*
+!.env.example
+data/
 *.swp
 *.swo
 *~

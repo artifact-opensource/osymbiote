@@ -5,7 +5,7 @@ OSYM_LIB="${OSYM_LIB:-/usr/lib/osym}"
 . "$OSYM_LIB/lib.sh"
 
 OSYM_PORT_GUEST=8422
-BUILTINS="help status llm model prompt chat ask history memory net sysinfo webpass agent doctor cmds clear logout reboot poweroff"
+BUILTINS="help status llm model prompt chat ask history memory sysconfig net sysinfo webpass agent doctor cmds clear logout reboot poweroff"
 
 c_dim() { printf '\033[2m%s\033[0m\n' "$*"; }
 c_ok() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -47,6 +47,7 @@ help() {
   prompt [show|set <text>|reset]   system prompt
   history [N|clear]          conversation history
   memory [recall [N]|stage <text>|stats|clear]   COMB memory
+  sysconfig [show|set <key> <value>]   system roles, sudo policy and owner IDs
   net                        network info and web UI URL
   sysinfo                    hardware manifest
   webpass [<password>]       set/reset the web portal password (min 8 chars)
@@ -87,7 +88,7 @@ llm() {
             cfg_set "$_k" "$*"
             case $? in 0) c_ok "$_k updated" ;; 1) c_err "unknown key '$_k' (keys: $CFG_KEYS)" ;; *) c_err "invalid value for $_k" ;; esac ;;
         key)
-            if [ "${2:-}" = "-" ] || [ -z "${2:-}" ]; then cfg_unset api_key; c_ok "api_key cleared"
+            if [ "${2:-}" = "-" ] || [ -z "${2:-}" ]; then cfg_unset api_key && c_ok "API credentials cleared" || c_err "could not clear API credentials"
             else cfg_set api_key "$2" && c_ok "api_key stored" || c_err "invalid key (no spaces, quotes or backslashes)"; fi ;;
         url) llm set base_url "${2:-}" ;;
         model) llm set model "${2:-}" ;;
@@ -98,8 +99,10 @@ llm() {
             shift 2>/dev/null
             if llm_chat "${*:-Reply with the single word: pong}"; then printf '%s\n' "$LLM_REPLY" | json_unescape; else c_err "failed: $LLM_ERR"; return 1; fi ;;
         reset)
-            if lock_acquire config; then rm -f "$CFG_FILE"; lock_release; c_ok "LLM configuration reset to defaults"
-            else c_err "could not lock LLM configuration"; return 1; fi ;;
+            if lock_acquire config; then rm -f "$CFG_FILE"; lock_release
+            else c_err "could not lock LLM configuration"; return 1; fi
+            if cfg_unset api_key; then c_ok "LLM settings and API credentials reset (environment routing defaults remain)"
+            else c_err "LLM settings reset, but API credentials could not be cleared"; return 1; fi ;;
         *) c_err "usage: llm [show|preset|set|key|url|model|models|test|reset]"; return 1 ;;
     esac
 }
@@ -156,6 +159,31 @@ memory() {
         stats) "$OSYM_COMB" stats ;;
         clear) "$OSYM_COMB" clear; c_ok "memory cleared" ;;
         *) c_err "usage: memory [recall [N]|stage <text>|stats|clear]"; return 1 ;;
+    esac
+}
+
+sysconfig() {
+    case "${1:-show}" in
+        show)
+            system_config_json
+            echo
+            printf '  secrets: %s\n' "$ENV_FILE"
+            if [ -n "$(cfg_get api_key)" ]; then echo "  .env    credential configured (values are not displayed)"
+            else echo "  .env    no credentials configured"; fi ;;
+        set)
+            [ $# -ge 3 ] || {
+                c_err "usage: sysconfig set <key> <value>"
+                c_dim "keys: $SYSTEM_CONFIG_KEYS"
+                return 1
+            }
+            system_set "$2" "$3"
+            case $? in
+                0) c_ok "$2 updated" ;;
+                1) c_err "unknown system setting '$2' (keys: $SYSTEM_CONFIG_KEYS)" ;;
+                2) c_err "invalid value for $2" ;;
+                *) c_err "could not update system configuration"; return 1 ;;
+            esac ;;
+        *) c_err "usage: sysconfig [show|set <key> <value>]"; return 1 ;;
     esac
 }
 

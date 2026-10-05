@@ -73,6 +73,8 @@ echo ""
 AUTH_COOKIE="Cookie: osym_session=$COOKIE"
 
 call "Health (authed)" -H "$AUTH_COOKIE" "$BASE_URL/health"
+call "System config (authed)" -H "$AUTH_COOKIE" "$BASE_URL/system/config"
+call_expect_code "File write requires confirmation" "428" -H "$AUTH_COOKIE" -X POST "$BASE_URL/fs/write"
 call "Provider" "$BASE_URL/provider"
 call "Hardware" "$BASE_URL/hardware"
 call "Chat (authed)" -H "$AUTH_COOKIE" -X POST -d "Hello, are you alive?" "$BASE_URL/chat"

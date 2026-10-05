@@ -1,0 +1,9 @@
+# Non-secret system policy. Runtime copy: /data/osymbiote/system.conf.
+web_role=admin
+fs_read_role=viewer
+fs_write_role=admin
+exec_role=root
+config_role=root
+sudo_mode=confirm
+owner_uid=0
+owner_gid=0

@@ -3,7 +3,17 @@
 DIR="${OSYM_COMB_DIR:-/data/comb/staging}"
 mkdir -p "$DIR" 2>/dev/null
 TODAY="$(date +%Y-%m-%d 2>/dev/null || echo unknown)"
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' | tr '\n\r' '  '; }
+esc() {
+    printf '%s' "$1" | od -An -v -tu1 | LC_ALL=C awk '{
+        for (i = 1; i <= NF; i++) {
+            c = $i + 0
+            if (c < 32) printf "\\u%04x", c
+            else if (c == 34) printf "\\\""
+            else if (c == 92) printf "\\\\"
+            else printf "%c", c
+        }
+    }'
+}
 case "${1:-}" in
     stage)
         shift
