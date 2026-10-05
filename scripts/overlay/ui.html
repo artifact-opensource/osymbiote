@@ -197,7 +197,7 @@ async function refresh(){
   if(h.ok&&h.data.authenticated){show('app');setHealth(h.data);startPoll();onTab(tab,true);splashOff();return}
   show('loginBox');stopPoll();splashOff();
 }
-function setHealth(d){$('dot').classList.toggle('bad',!d);if(d)$('topMeta').textContent='cores '+d.cores+' · free '+fmtKb(d.mem_free_kb)+' · up '+fmtUp(d.uptime_s)}
+function setHealth(d){$('dot').classList.toggle('bad',!d);if(d)$('topMeta').textContent='cores '+d.cores+' · free '+fmtKb(d.mem_free_kb)+' · up '+fmtUp(d.uptime_s)+' · data '+(d.data_persistent?'persistent':'volatile')}
 function startPoll(){if(poll)return;poll=setInterval(async()=>{const h=await api('/health');setHealth(h.ok?h.data:null);if(h.ok&&!h.data.authenticated){refresh()}else if(tab==='system')loadSystem()},8000)}
 function stopPoll(){clearInterval(poll);poll=null}
 async function setupInit(){const r=await api('/setup/init',{method:'POST',body:$('setupPw').value});$('setupOut').textContent=r.ok?'':(r.data.error||'failed');if(r.ok){const l=await api('/auth/login',{method:'POST',body:$('setupPw').value});$('setupPw').value=''}refresh()}
@@ -318,7 +318,7 @@ async function listModels(){
 
 async function loadMemory(){
   const [r,s]=await Promise.all([api('/memory?limit=50'),api('/memory/stats')]);
-  if(s.ok)$('memStats').textContent=s.data.entries+' entries in '+s.data.files+' file(s) · stored in RAM only';
+  if(s.ok)$('memStats').textContent=s.data.entries+' entries in '+s.data.files+' file(s) · stored under /data (persistence depends on boot mode)';
   const box=$('memList');box.textContent='';
   if(!r.ok||!r.data.length){box.innerHTML='<p class="sub">No entries.</p>';return}
   r.data.slice().reverse().forEach(m=>{const d=document.createElement('div');d.className='item';const s=document.createElement('small');s.textContent=m.ts;d.appendChild(s);d.appendChild(document.createElement('br'));d.appendChild(document.createTextNode(m.text));box.appendChild(d)});

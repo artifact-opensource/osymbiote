@@ -499,7 +499,8 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
         /health)
             if is_authenticated; then AUTH_STATE=true; else AUTH_STATE=false; fi
             if is_setup_complete; then SETUP_STATE=true; else SETUP_STATE=false; fi
-            RESP="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"version\":\"0.3.0\",\"uptime_s\":${UPTIME:-0},\"cores\":$CORES,\"mem_free_kb\":${MEM_FREE:-0},\"mem_total_kb\":${MEM_TOTAL:-0},\"setup_complete\":$SETUP_STATE,\"authenticated\":$AUTH_STATE}"
+            [ "${OSYM_DATA_PERSISTENT:-0}" = "1" ] && PERSISTENCE=true || PERSISTENCE=false
+            RESP="{\"status\":\"alive\",\"agent\":\"osymbiote\",\"version\":\"0.3.0\",\"uptime_s\":${UPTIME:-0},\"cores\":$CORES,\"mem_free_kb\":${MEM_FREE:-0},\"mem_total_kb\":${MEM_TOTAL:-0},\"setup_complete\":$SETUP_STATE,\"authenticated\":$AUTH_STATE,\"data_persistent\":$PERSISTENCE}"
             ;;
         /provider)
             RESP="{\"provider\":\"$AI_PROVIDER\",\"base_url\":\"$OPENAI_BASE_URL\",\"model\":\"$OPENAI_MODEL\",\"protocol\":\"openai-compatible\"}"

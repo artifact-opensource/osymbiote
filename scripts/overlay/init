@@ -19,6 +19,21 @@ mkdir -p /dev/pts /dev/shm /root
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
 
+mkdir -p /data
+OSYM_DATA_PERSISTENT=0
+for m in virtio_ring virtio virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci 9pnet 9pnet_virtio 9p; do
+    for f in /lib/modules/$m.ko /lib/modules/$m.ko.gz; do
+        [ -f "$f" ] && { /bin/busybox insmod "$f" 2>/dev/null; break; }
+    done
+done
+if mount -t 9p -o trans=virtio,version=9p2000.L osymdata /data 2>/dev/null; then
+    OSYM_DATA_PERSISTENT=1
+    echo "[init] Persistent data: mounted QEMU shared storage at /data"
+else
+    echo "[init] WARNING: persistent data unavailable; settings will be lost at shutdown"
+fi
+export OSYM_DATA_PERSISTENT
+
 # Make sure every busybox applet is registered as a command.
 /bin/busybox --install -s /bin 2>/dev/null || true
 

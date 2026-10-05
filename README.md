@@ -68,12 +68,12 @@ Power on → BIOS/UEFI → vmlinuz loads
 
 ### Known limitations (read before relying on this)
 
-- **Storage is not persistent.** `/data` (passwords, sessions, COMB memory entries) lives on the initramfs/tmpfs. A reboot wipes everything — there is no disk-backed mount anywhere in `/init`.
+- **Persistence depends on the boot method.** QEMU launchers share a host directory into guest `/data` by default, so settings survive VM restarts. Direct boots without a QEMU 9p share fall back to volatile initramfs storage.
 - **HTTP concurrency depends on BusyBox applets.** The preferred `tcpsvd` server creates one handler per connection; the `nc -lk` fallback varies by BusyBox build. Requests have bounded header/body timeouts and a 64 KiB body limit. If neither forking server is available, the final `nc -e` fallback is serial.
 - **Portal authorization is single-account.** The password creates one shared portal identity with one configured role; this is not multi-user Unix account isolation. Console commands run as root. Do not expose the portal to untrusted networks.
-- **Configuration remains RAM-backed.** The `.env` and system policy files are created under `/data/osymbiote`, which is volatile in the current initramfs build. Credentials and settings are lost on reboot unless a future persistent `/data` mount is added.
+- **QEMU data is host-backed, not encrypted.** The default `data/` directory contains passwords, API keys, sessions, and user data. Restrict host access and back it up securely; the repository ignores this directory.
 - **"Architecture-aware" intent routing is cosmetic.** `/intent` detects `x86_64`/`arm64`/`riscv64`/`generic` and reports it in the response, but every intent runs the exact same BusyBox command regardless of arch family — there are no real per-arch adapters yet.
-- **No password recovery.** Once `/setup/init` runs, there's no way to reset the password short of wiping `/data` (which a reboot does anyway, today).
+- **No password recovery.** Once `/setup/init` runs, reset the password from the guest console with `webpass`, or remove the `data/osymbiote/auth/` directory while the VM is stopped.
 - **`scripts/aegis-orchestrator.sh` is personal tooling**, not a general-purpose script — it hardcodes a specific device IP, username, and local filesystem path, and won't run for other contributors as-is.
 
 ---
@@ -122,6 +122,7 @@ Boots OSymbiote in QEMU with:
 - Port forwarding: host `8422` → guest `8422` (override with `OSYM_PORT`)
 - Serial console output (`-nographic`; `Ctrl+A X` to exit QEMU)
 - `./run.sh --background` boots detached and polls `/health` to confirm the agent is alive
+- Persistent guest `/data` shared with the host's ignored `data/` directory (override with `OSYM_DATA_DIR`; set `OSYM_PERSIST=0` for a volatile run)
 
 ### Access
 
@@ -177,7 +178,7 @@ Auth hardening included:
 
 ### Secrets, settings, and roles
 
-The boot image contains examples only, never real credentials. At startup, the guest copies `/etc/osymbiote/.env.example` and `/etc/osymbiote/system.conf.example` into `/data/osymbiote/.env` and `/data/osymbiote/system.conf` when those files do not already exist. The `.env` file is set to mode `0600`; it uses raw `KEY=value` lines and is parsed using an allowlist, never sourced or evaluated. API keys set in the portal or with `llm key` are written there. The LLM endpoint only returns whether a key is set and a masked value.
+The boot image contains examples only, never real credentials. At startup, the guest copies `/etc/osymbiote/.env.example` and `/etc/osymbiote/system.conf.example` into `/data/osymbiote/.env` and `/data/osymbiote/system.conf` when those files do not already exist. Under QEMU, `/data` is backed by the host share; the `.env` file is set to mode `0600`. It uses raw `KEY=value` lines and is parsed using an allowlist, never sourced or evaluated. API keys set in the portal or with `llm key` are written there. The LLM endpoint only returns whether a key is set and a masked value.
 
 Supported secret keys include `OSYM_OPENAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GROQ_API_KEY`. Optional routing defaults are `OSYM_OPENAI_BASE_URL`, `OSYM_OPENAI_MODEL`, and `OSYM_AI_PROVIDER`; saved LLM settings take precedence over these defaults. A process environment value takes precedence over the corresponding `.env` value. Never commit real keys or bake them into a generated image.
 
@@ -220,11 +221,11 @@ Today this is capability detection, not real per-arch logic — every family run
 
 | Phase | Milestone | Status |
 |---|---|---|
-| **1** | Proof of Life — boots, networks, serves HTTP API + UI, agent supervisor loop | ✅ Working (ephemeral; see limitations above) |
+| **1** | Proof of Life — boots, networks, serves HTTP API + UI, agent supervisor loop | ✅ Working (QEMU host-backed `/data`; direct boots may be volatile) |
 | **2** | Cortex Integration — LLM reasoning, tool use, autonomous decisions | 🟡 LLM chat and bounded, user-confirmed tool calls exist; no autonomous planning |
 | **3** | Nerve Layer — hardware sensors, filesystem watchers, event bus | Planned — today is poll-based, not event-driven |
 | **4** | Immune System — self-healing, process resurrection, resource management | Planned — today is a restart-if-dead loop for one process |
-| **5** | Persistent Memory — survives reboots, learns from history | Planned — COMB memory is tmpfs-only today, wiped on reboot |
+| **5** | Persistent Memory — survives reboots, learns from history | 🟡 `/data` survives QEMU restarts; indexing/search and hardware storage discovery remain planned |
 | **6** | Multi-Agent — spawn child agents, coordinate across machines | Planned — not started |
 | **7** | Bare Metal — real hardware boot, ARM64 support, GPU passthrough | Planned — only tested under QEMU x86_64 today |
 

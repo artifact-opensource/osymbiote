@@ -202,7 +202,10 @@ if ! (cd "$MODTMP" && zcat "$BUILD/initramfs-virt" | cpio -id --quiet \
     'lib/modules/*/kernel/drivers/net/virtio_net.ko*' \
     'lib/modules/*/kernel/drivers/net/net_failover.ko*' \
     'lib/modules/*/kernel/net/core/failover.ko*' \
-    'lib/modules/*/kernel/net/packet/af_packet.ko*' 2>/dev/null); then
+    'lib/modules/*/kernel/net/packet/af_packet.ko*' \
+    'lib/modules/*/kernel/drivers/virtio/*' \
+    'lib/modules/*/kernel/fs/9p/*' \
+    'lib/modules/*/kernel/net/9p/*' 2>/dev/null); then
     rm -rf "$MODTMP" "$INITRD/lib/modules" "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
     echo "  ERROR: Cannot extract NIC modules from Alpine initramfs."
     exit 1
@@ -252,17 +255,27 @@ echo "  Initramfs: $INIT_SIZE"
 # ═══════════════════════════════════════════════
 echo "[6/6] Creating boot script..."
 cat > "$OSYM/boot.sh" << 'BOOTSCRIPT'
-#!/bin/sh
+#!/bin/bash
 # OSymbiote — QEMU Boot (Proof of Life)
 DIR="$(cd "$(dirname "$0")" && pwd)"
+DATA_DIR="${OSYM_DATA_DIR:-$DIR/data}"
+PERSIST="${OSYM_PERSIST:-1}"
 
 echo "Booting OSymbiote..."
 echo "  Kernel:    $DIR/build/vmlinuz"
 echo "  Initramfs: $DIR/images/initramfs.cpio.gz"
 echo "  RAM: 128MB, Port forward: host:8422 → guest:8422"
+if [ "$PERSIST" = "1" ]; then
+    mkdir -p "$DATA_DIR"
+    chmod 700 "$DATA_DIR"
+    echo "  Data: $DATA_DIR (persistent)"
+elif [ "$PERSIST" != "0" ]; then
+    echo "Invalid OSYM_PERSIST value: use 1 or 0" >&2
+    exit 1
+fi
 echo ""
 
-qemu-system-x86_64 \
+QEMU_ARGS=(
     -m 128 \
     -kernel "$DIR/build/vmlinuz" \
     -initrd "$DIR/images/initramfs.cpio.gz" \
@@ -273,6 +286,11 @@ qemu-system-x86_64 \
     -device e1000,netdev=net0 \
     -smp 2 \
     -cpu max
+)
+if [ "$PERSIST" = "1" ]; then
+    QEMU_ARGS+=( -virtfs "local,path=$DATA_DIR,mount_tag=osymdata,security_model=mapped-xattr,id=osymdata" )
+fi
+qemu-system-x86_64 "${QEMU_ARGS[@]}"
 
 echo ""
 echo "OSymbiote shut down."
@@ -356,6 +374,7 @@ echo ""
 AUTH_COOKIE="Cookie: osym_session=$COOKIE"
 
 call "Health (authed)" -H "$AUTH_COOKIE" "$BASE_URL/health"
+call "Data persistence status" "$BASE_URL/health"
 call "System config (authed)" -H "$AUTH_COOKIE" "$BASE_URL/system/config"
 call_expect_code "File write requires confirmation" "428" -H "$AUTH_COOKIE" -X POST "$BASE_URL/fs/write"
 call "Provider" "$BASE_URL/provider"

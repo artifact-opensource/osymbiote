@@ -10,6 +10,8 @@ INITRD="images/initramfs.cpio.gz"
 PORT="${OSYM_PORT:-8422}"
 RAM="${OSYM_RAM:-128}"
 CPUS="${OSYM_CPUS:-2}"
+DATA_DIR="${OSYM_DATA_DIR:-$(pwd)/data}"
+PERSIST="${OSYM_PERSIST:-1}"
 
 if [ ! -f "$KERNEL" ] || [ ! -f "$INITRD" ]; then
     echo "Missing kernel or initramfs. Run: bash scripts/build-phase1.sh"
@@ -34,6 +36,9 @@ echo "┌───────────────────────�
 echo "│  OSymbiote — Starting...         │"
 echo "│  API: http://localhost:$PORT       │"
 echo "│  RAM: ${RAM}MB, CPUs: $CPUS       │"
+if [ "$PERSIST" = "1" ]; then
+    echo "│  Data: $DATA_DIR (persistent)     │"
+fi
 echo "└──────────────────────────────────┘"
 
 QEMU_ARGS=(
@@ -48,8 +53,16 @@ QEMU_ARGS=(
     -smp "$CPUS"
     -cpu max
 )
+if [ "$PERSIST" = "1" ]; then
+    mkdir -p "$DATA_DIR"
+    chmod 700 "$DATA_DIR"
+    QEMU_ARGS+=( -virtfs "local,path=$DATA_DIR,mount_tag=osymdata,security_model=mapped-xattr,id=osymdata" )
+elif [ "$PERSIST" != "0" ]; then
+    echo "Invalid OSYM_PERSIST value: use 1 or 0" >&2
+    exit 1
+fi
 
-if [ "$1" = "--background" ]; then
+if [ "${1:-}" = "--background" ]; then
     qemu-system-x86_64 "${QEMU_ARGS[@]}" &>/dev/null &
     QEMU_PID=$!
     echo "QEMU PID: $QEMU_PID"
