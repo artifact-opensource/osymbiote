@@ -85,6 +85,7 @@ OSymbiote boots **inside a QEMU virtual machine**. The host (Linux, WSL2, or Ter
 ### Prerequisites
 
 - QEMU (`qemu-system-x86_64`)
+- `squashfs-tools` (`unsquashfs`) for extracting kernel-matched 9p modules
 - Linux host, WSL2, or **Termux on Android**
 - Internet connection (for the build step and for LLM calls)
 
@@ -96,7 +97,7 @@ OSymbiote builds and runs fully inside Termux — no root required. The build sc
 pkg update -y && pkg upgrade -y
 pkg install -y git
 git clone <this-repo-url> osymbiote && cd osymbiote
-bash scripts/build-phase1.sh   # installs qemu-system-x86-64, wget, curl, coreutils, cpio, gzip via pkg
+bash scripts/build-phase1.sh   # installs QEMU, squashfs-tools, wget, curl, coreutils, cpio, gzip via pkg
 ./run.sh
 ```
 
@@ -108,7 +109,7 @@ bash scripts/build-phase1.sh   # installs qemu-system-x86-64, wget, curl, coreut
 ./scripts/build-phase1.sh
 ```
 
-This downloads an Alpine Linux kernel + modules, fetches a static BusyBox, assembles the initramfs, and produces a bootable image (`build/vmlinuz` + `images/initramfs.cpio.gz`).
+This downloads a matching Alpine Linux kernel, initramfs, and module loop, fetches a static BusyBox, extracts the required NIC and 9p persistence modules, assembles the initramfs, and produces a bootable image (`build/vmlinuz` + `images/initramfs.cpio.gz`).
 
 ### Run
 

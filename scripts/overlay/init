@@ -86,6 +86,8 @@ if [ -f /data/osymbiote/.env ]; then chmod 600 /data/osymbiote/.env; fi
 if [ ! -f /data/osymbiote/system.conf ] && [ -f /etc/osymbiote/system.conf.example ]; then
     cp /etc/osymbiote/system.conf.example /data/osymbiote/system.conf
 fi
+if [ -f /data/osymbiote/system.conf ]; then chmod 600 /data/osymbiote/system.conf; fi
+if [ -f /data/osymbiote/config ]; then chmod 600 /data/osymbiote/config; fi
 /bin/comb stage "OSymbiote booted. ${CORES} cores, ${MEM_MB}MB RAM, ${ARCH}" 2>/dev/null || true
 
 cat > /run/hardware.json << HWEOF
