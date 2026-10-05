@@ -5,6 +5,7 @@ These documents describe OSymbiote **0.4.0**, as identified by the repository's 
 ## User documentation
 
 - [Quick start](quickstart.md): prerequisites, build, first boot, and provider configuration.
+- [Bootable images](quickstart.md#package-iso-disk-and-usb-images): create, inspect, write, and boot separate ISO, disk, and USB artifacts.
 - [Architecture and support](architecture.md): implemented runtime and validated target boundaries.
 - [API reference](api-reference.md): HTTP routes, authentication, request formats, and limits.
 - [Security](security.md): trust boundaries, credentials, authorization, and deployment cautions.

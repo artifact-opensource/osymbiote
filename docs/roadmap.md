@@ -10,6 +10,7 @@ This roadmap describes current scope as of OSymbiote 0.4.0. Planned entries are 
 - Explicit confirmation precondition for web-mediated file writes and commands, in addition to authentication and role checks.
 - x86_64 image build/launcher.
 - ARM64 QEMU `virt` image build/launcher; build artifacts have passed checks, but runtime boot is not yet verified here.
+- Versioned x86_64 hybrid ISO, raw disk-image, and USB-image packaging; media boot has not been hardware-certified.
 - QEMU-backed `/data` persistence using 9p when the share mounts successfully.
 
 ## Known limits
@@ -24,7 +25,7 @@ This roadmap describes current scope as of OSymbiote 0.4.0. Planned entries are 
 
 ## Planned direction
 
-1. Boot-test and automate runtime smoke testing for generic ARM64 QEMU `virt`.
+1. Boot-test and automate runtime smoke testing for x86_64 and generic ARM64 media/QEMU targets.
 2. Define a maintainable architecture/build interface shared by x86_64 and ARM64 targets.
 3. Design board-specific support independently, beginning with documented firmware, kernel, device-tree, artifact, and validation requirements.
 4. Improve storage discovery and persistence beyond the QEMU-only 9p workflow.

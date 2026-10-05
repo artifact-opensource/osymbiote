@@ -10,6 +10,7 @@ OSymbiote is an early-stage project. Changes should remain small, testable, and 
 | `scripts/overlay/` | Guest PID 1, `osh`, HTTP handler, shared shell library, portal, and COMB tool |
 | `scripts/build-phase1.sh` | x86_64 image builder and generated `boot.sh`/`test.sh` helpers |
 | `scripts/build-arm64.sh` | ARM64 QEMU `virt` image builder |
+| `scripts/package-images.sh` | GRUB/xorriso hybrid ISO and separate raw disk/USB image packager |
 | `run.sh` | x86_64 QEMU launcher |
 | `run-arm64.sh` | ARM64 QEMU `virt` launcher |
 | `docs/` | User, API, architecture, security, operations, and contributor documentation |

@@ -25,6 +25,12 @@ Stop the VM before editing files in the host data directory. Back up this direct
 
 The ARM64 launcher defaults to 512 MiB; x86_64 defaults to 128 MiB. Both default to two CPUs and host port 8422.
 
+## Boot media
+
+See the [Quick Start image section](quickstart.md#package-iso-disk-and-usb-images) for packaging dependencies, image names, checksums, safe USB writing, mounting, and boot steps. The `.disk.img` and `.usb.img` outputs are raw copies of the hybrid ISO. They are not writable system disks and do not install to internal storage.
+
+When booted on physical hardware, the guest does not get QEMU host-port forwarding or a QEMU 9p data share. Use the guest's LAN address only on a trusted network; persistent settings are not available unless a persistent data device is separately mounted (automatic discovery is not implemented).
+
 ## Health and diagnostics
 
 `GET /health` reports runtime status, version, uptime, CPU/memory metrics, setup/authentication state, and whether `/data` is persistent. The `osh` console offers `help`, `status`, `doctor`, `net`, `llm`, `history`, and other guest commands. QEMU serial output carries initialization and network messages.

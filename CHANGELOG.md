@@ -10,6 +10,7 @@ Notable user-visible changes are recorded here. Version numbers follow the repos
 - Optional persistent `/data` sharing for QEMU through 9p.
 - Professional user, architecture, API, security, operations, development, roadmap, and versioning documentation.
 - Canonical `VERSION` metadata exposed by the guest `/health` endpoint.
+- Versioned hybrid ISO, disk-image, and USB-image packaging from built x86_64 or ARM64 artifacts.
 
 ### Changed
 
@@ -19,4 +20,5 @@ Notable user-visible changes are recorded here. Version numbers follow the repos
 ### Limitations
 
 - ARM64 image building and artifact checks passed; runtime boot was not verified in this environment.
+- GRUB/xorriso-generated media still require boot testing on actual firmware; the raw `.img` variants are copies of the hybrid ISO, not writable root disks.
 - Vendor-board and bare-metal targets are not implemented or certified.

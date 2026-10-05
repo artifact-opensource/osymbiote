@@ -14,6 +14,7 @@ OSymbiote boots a Linux kernel into a small BusyBox initramfs. Its PID 1 script 
 |---|---|
 | x86_64 initramfs build | Build script available; QEMU runtime support depends on host installation |
 | ARM64 QEMU `virt` image | Image builder and launcher available; boot has not been verified in this environment |
+| x86_64 ISO, disk, and USB images | Separate versioned artifacts can be packaged from the x86_64 build |
 | Vendor ARM boards and bare metal | Not implemented or certified |
 | Authenticated HTTP portal and API | Available; single shared portal identity |
 | LLM chat and tool proposals | Available for configured providers; write and command operations require an authenticated request and confirmation header |
@@ -32,6 +33,8 @@ bash scripts/build-phase1.sh
 ./run.sh
 ```
 
+To also package a bootable ISO and raw disk/USB images, install the GRUB and `xorriso` host tools and run `bash scripts/package-images.sh x86_64`.
+
 ### ARM64 QEMU `virt`
 
 Requirements: the build tools above and `qemu-system-aarch64` to run.
@@ -42,6 +45,8 @@ bash scripts/build-arm64.sh
 ```
 
 The ARM64 image is a generic QEMU reference target, not a Raspberry Pi, Rockchip, i.MX, Jetson, Qualcomm, or ARM FVP image. Both launchers forward host port `8422` to guest port `8422` and share host `data/` with guest `/data` by default.
+
+The package script can also create ARM64 UEFI media when ARM64 GRUB EFI modules are installed; physical-board compatibility is not implied.
 
 Open `http://localhost:8422/ui`. On first boot, initialize the portal password and then sign in. Configure an LLM provider and API key in the portal or through `osh`. For the complete setup, options, and security constraints, see the [Quick Start guide](docs/quickstart.md).
 
@@ -72,6 +77,7 @@ CHANGELOG.md                    User-visible release history
 docs/                           User, developer, API, security, and operations docs
 scripts/build-phase1.sh         x86_64 image builder
 scripts/build-arm64.sh          ARM64 QEMU virt image builder
+scripts/package-images.sh       Versioned ISO, disk, and USB image packager
 scripts/overlay/                Guest init, shell, HTTP handler, UI, and shared library
 run.sh                          x86_64 QEMU launcher
 run-arm64.sh                    ARM64 QEMU virt launcher

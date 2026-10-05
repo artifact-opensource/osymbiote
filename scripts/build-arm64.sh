@@ -147,6 +147,7 @@ echo "[4/5] Packing ARM64 initramfs..."
 gzip -t "$PAIR_TMP/arm64-initramfs.cpio.gz"
 
 rm -f "$IMAGES/arm64-initramfs.cpio.gz"
+mkdir -p "$BUILD"
 rm -rf "$BUILD/initrd"
 mv "$BUILD_STAGE/initrd" "$BUILD/initrd"
 mv "$BUILD_STAGE/vmlinuz" "$BUILD/vmlinuz"

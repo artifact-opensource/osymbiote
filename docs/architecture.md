@@ -39,6 +39,8 @@ The HTTP server is a constrained shell-script implementation, not a general-purp
 |---|---|---|---|
 | x86_64 QEMU | Builder available | QEMU launcher available | Alpine `virt` kernel; e1000 and virtio network support |
 | ARM64 QEMU `virt` | Builder available; artifact checks passed | Not runtime-verified in this environment | Alpine AArch64 `virt` kernel and BusyBox; uses `virtio-net-pci` |
+| x86_64 ISO/disk/USB | Packaging script available | Not hardware-boot certified | Versioned hybrid ISO; disk and USB `.img` files are raw copies of the ISO |
+| ARM64 UEFI ISO/disk/USB | Packaging script available when arm64-efi GRUB modules are installed | Not hardware-boot certified | Generic ARM64 UEFI media only; not a vendor board image |
 | Raspberry Pi, Rockchip, NXP i.MX, Jetson, Qualcomm, ARM FVP | Not implemented | Not supported/certified | Requires target-specific firmware, boot flow, kernel configuration/drivers, DTBs, and testing |
 | Other bare-metal systems | Not implemented | Not supported/certified | No general installer or hardware certification process exists |
 
