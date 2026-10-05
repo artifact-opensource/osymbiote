@@ -142,11 +142,12 @@ The agent exposes a REST API on port `8422` (forwarded to host `8422` by default
 | `/health` | Agent health, setup/auth status, and basic system metrics |
 | `/provider` | Active OpenAI-compatible provider settings |
 | `/hardware` | Hardware manifest |
-| `/chat` (POST body text) | Auth-required chat with the configured LLM (history-aware); echo fallback when no API key is set |
+| `/chat` (POST body text) | Auth-required plain chat with the configured LLM (history-aware) |
+| `/agent/tools` (POST JSON messages) | Auth-required OpenAI-compatible tool-calling round; execution is delegated to the user-confirmed native tool routes |
 | `/llm` (GET / POST `key=value` lines) | Auth-required LLM config: `provider`, `base_url`, `model`, `api_key`, `temperature`, `max_tokens`, `history_turns`, `preset` |
 | `/llm/test` (POST), `/llm/models` | Auth-required provider connectivity test / model list |
 | `/prompt` (GET / POST text / DELETE) | Auth-required system prompt |
-| `/history` (GET `?limit=N` / DELETE) | Auth-required conversation history |
+| `/history` (GET `?limit=N` / POST message / DELETE) | Auth-required conversation history |
 | `/memory` (GET `?limit=N` / POST text / DELETE), `/memory/stats` | Auth-required COMB memory (aliases of `/comb/*`) |
 | `/system/network`, `/system/processes`, `/system/disk`, `/system/memory` | Auth-required system views |
 | `/ai` (POST body text) | Auth-required OpenAI-compatible `/chat/completions` proxy |
@@ -163,7 +164,7 @@ All responses are JSON with CORS headers.
 
 On a fresh boot, only setup routes are available. Initialize with `POST /setup/init`, then login via `POST /auth/login`.  
 Session auth uses a short-lived cookie (`osym_session`, 15 minutes). Sensitive routes enforce auth.
-The portal asks for confirmation before each root command or file write. These native tools are user-driven; LLM tool invocation is not enabled. This phase's image build remains x86_64/QEMU-focused; bare-metal and ARM64 boot support are not yet implemented.
+The portal supports LLM-proposed file reads, writes, and shell commands, with at most three model/tool rounds and two tool calls per round. Writes and root commands always require explicit per-operation confirmation; denied actions are returned to the model as tool results. This phase's image build remains x86_64/QEMU-focused; bare-metal and ARM64 boot support are not yet implemented.
 
 Auth hardening included:
 - rate limiting on setup/login endpoints

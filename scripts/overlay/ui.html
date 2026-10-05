@@ -176,7 +176,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
 
 <script>
 const $=id=>document.getElementById(id);
-let poll=null,tab='chat',chatLoaded=false,chatPending=false;
+let poll=null,tab='chat',chatLoaded=false,chatPending=false,chatMessages=[];
 async function api(url,opt){
   opt=opt||{};
   try{const r=await fetch(url,{credentials:'same-origin',...opt});const t=await r.text();let d;try{d=JSON.parse(t)}catch{d={raw:t}}
@@ -216,17 +216,63 @@ async function loadChat(){
   const l=await api('/llm');if(l.ok)$('chatSub').textContent=l.data.api_key_set?'Model: '+l.data.model+' via '+l.data.provider:'No API key yet — open “LLM & Provider” to configure.';
   if(chatLoaded)return;chatLoaded=true;$('msgs').textContent='';
   const h=await api('/history?limit=40');
-  if(h.ok&&Array.isArray(h.data))h.data.forEach(m=>addMsg(m.role,m.content));
+  if(h.ok&&Array.isArray(h.data)){h.data.slice(-12).forEach(m=>{if(m.role==='user'||m.role==='assistant')chatMessages.push({role:m.role,content:String(m.content||'').slice(0,1500)});addMsg(m.role,m.content)})}
   if(!$('msgs').children.length)addMsg('assistant','Hello. I am OSymbiote — the agent that is this operating system. Ask me anything, or press “Intent” to run a system query (network, disk, process, memory, uptime).');
+}
+async function executeAgentTool(call){
+  let args;
+  try{args=JSON.parse(call.function.arguments||'{}')}catch(e){return{error:'invalid_tool_arguments'}}
+  const name=call.function.name;
+  if(name==='os_read_file'){
+    const r=await api('/fs/read',{method:'POST',headers:{'X-OSYM-Path':String(args.path||'')},body:''});
+    return r.ok?r.data:{error:r.data.error||'read_failed'};
+  }
+  if(name==='os_exec'){
+    const command=String(args.command||'');
+    if(!command)return{error:'missing_command'};
+    if(!confirm('The agent proposes this root command. Run it?\n\n'+command))return{error:'denied_by_user'};
+    const r=await api('/exec',{method:'POST',headers:{'X-OSYM-User-Confirmed':'yes'},body:command});
+    return r.ok?r.data:{error:r.data.error||'execution_failed'};
+  }
+  if(name==='os_write_file'){
+    const path=String(args.path||''),content=String(args.content||'');
+    if(!path)return{error:'missing_path'};
+    if(!confirm('The agent proposes writing '+content.length+' characters as root to '+path+'. Continue?'))return{error:'denied_by_user'};
+    const r=await api('/fs/write',{method:'POST',headers:{'X-OSYM-Path':path,'X-OSYM-User-Confirmed':'yes'},body:content});
+    return r.ok?r.data:{error:r.data.error||'write_failed'};
+  }
+  return{error:'unsupported_tool'}
+}
+async function saveAgentHistory(role,content){
+  return api('/history',{method:'POST',headers:{'X-OSYM-History-Role':role},body:content});
 }
 async function sendChat(){
   if(chatPending)return;
-  const q=$('prompt').value.trim();if(!q)return;$('prompt').value='';addMsg('user',q);
+  const q=$('prompt').value.trim();if(!q)return;if(q.length>8000){toast('Messages are limited to 8000 characters',true);return}$('prompt').value='';addMsg('user',q);
   chatPending=true;$('sendBtn').disabled=true;
   const t=addMsg('assistant','');t.classList.add('typing');t.innerHTML='<span></span><span></span><span></span>';
   try{
-    const r=await api('/chat',{method:'POST',body:q});t.remove();
-    if(r.ok)addMsg('assistant',r.data.response||JSON.stringify(r.data));else addMsg('err','Error: '+(r.data.error||r.code));
+    chatMessages.push({role:'user',content:q});
+    let answer='',failure='';
+    for(let round=0;round<3;round++){
+      const r=await api('/agent/tools',{method:'POST',body:JSON.stringify(chatMessages)});
+      if(!r.ok){failure=r.data.error||'tool_request_failed';break}
+      const message=r.data&&r.data.choices&&r.data.choices[0]&&r.data.choices[0].message;
+      if(!message){failure='invalid_provider_response';break}
+      if(!Array.isArray(message.tool_calls)||!message.tool_calls.length){answer=message.content||'';break}
+      chatMessages.push(message);
+      for(let i=0;i<message.tool_calls.length;i++){
+        const call=message.tool_calls[i];
+        const result=i<2?await executeAgentTool(call):{error:'tool_call_limit_reached'};
+        const resultText=JSON.stringify(result);
+        chatMessages.push({role:'tool',tool_call_id:call.id,content:resultText.slice(0,3000)});
+        addMsg('assistant','Tool '+(call.function&&call.function.name||'unknown')+': '+(result.error||'completed'));
+      }
+      if(round===2)failure='tool_round_limit_reached';
+    }
+    t.remove();
+    if(answer){chatMessages.push({role:'assistant',content:answer});addMsg('assistant',answer);await saveAgentHistory('user',q);await saveAgentHistory('assistant',answer)}
+    else addMsg('err','Agent error: '+(failure||'no_response'));
     loadChatSub();
   }catch(e){t.remove();addMsg('err','Error: request failed')}
   finally{chatPending=false;$('sendBtn').disabled=false}
@@ -244,7 +290,7 @@ async function loadHistory(){
   if(!r.ok||!r.data.length){box.innerHTML='<p class="sub">No history yet.</p>';return}
   r.data.slice().reverse().forEach(m=>{const d=document.createElement('div');d.className='item';const s=document.createElement('small');s.textContent=m.role+' · '+(m.ts||'');d.appendChild(s);d.appendChild(document.createElement('br'));d.appendChild(document.createTextNode(m.content));box.appendChild(d)});
 }
-async function clearHistory(){if(!confirm('Clear all conversation history?'))return;await api('/history',{method:'DELETE'});chatLoaded=false;toast('History cleared');loadHistory()}
+async function clearHistory(){if(!confirm('Clear all conversation history?'))return;await api('/history',{method:'DELETE'});chatMessages=[];chatLoaded=false;toast('History cleared');loadHistory()}
 
 async function loadPrompt(){const r=await api('/prompt');if(r.ok){$('sysPrompt').value=r.data.prompt;$('promptState').textContent=r.data.default?'Using the default prompt.':'Custom prompt active.'}}
 async function savePrompt(){const r=await api('/prompt',{method:'POST',body:$('sysPrompt').value});toast(r.ok?'Prompt saved':'Save failed',!r.ok);loadPrompt()}

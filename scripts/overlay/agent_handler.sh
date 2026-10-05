@@ -24,6 +24,7 @@ SESSION_HEADER=""
 TOOL_CALL_TEST_HEADER=""
 TOOL_PATH_HEADER=""
 TOOL_CONFIRMED_HEADER=""
+HISTORY_ROLE_HEADER=""
 while IFS= read -r -t 15 header; do
     header="$(printf '%s' "$header" | tr -d '\r')"
     [ -z "$header" ] && break
@@ -35,6 +36,7 @@ while IFS= read -r -t 15 header; do
         X-Tool-Call-Test:*|x-tool-call-test:*) TOOL_CALL_TEST_HEADER="${header#*: }" ;;
         X-OSYM-Path:*|x-osym-path:*) TOOL_PATH_HEADER="${header#*: }" ;;
         X-OSYM-User-Confirmed:*|x-osym-user-confirmed:*) TOOL_CONFIRMED_HEADER="${header#*: }" ;;
+        X-OSYM-History-Role:*|x-osym-history-role:*) HISTORY_ROLE_HEADER="${header#*: }" ;;
     esac
 done
 
@@ -433,6 +435,18 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                 fi
             fi
             ;;
+        /agent/tools)
+            if enforce_auth && need_post; then
+                if [ -z "$(cfg_get api_key)" ]; then
+                    STATUS="400 Bad Request"; RESP='{"error":"no_api_key"}'
+                elif [ "${BODY#\[}" = "$BODY" ] || [ "${BODY%\]}" = "$BODY" ] || [ "$BODY" = "[]" ]; then
+                    STATUS="400 Bad Request"; RESP='{"error":"messages_array_required"}'
+                else
+                    RESP="$(llm_tools_raw "$BODY")"
+                    [ -n "$RESP" ] || { STATUS="502 Bad Gateway"; RESP='{"error":"provider_request_failed"}'; }
+                fi
+            fi
+            ;;
         /prompt)
             if enforce_auth; then
                 case "$METHOD" in
@@ -447,6 +461,19 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
                 if [ "$METHOD" = "DELETE" ]; then
                     history_clear
                     RESP='{"status":"cleared"}'
+                elif [ "$METHOD" = "POST" ]; then
+                    case "$HISTORY_ROLE_HEADER" in user|assistant) ;;
+                        *) STATUS="400 Bad Request"; RESP='{"error":"invalid_history_role"}' ;;
+                    esac
+                    if [ "$STATUS" = "200 OK" ]; then
+                        if lock_acquire history; then
+                            history_add "$HISTORY_ROLE_HEADER" "$(json_escape "$BODY")"
+                            lock_release
+                            RESP='{"status":"recorded"}'
+                        else
+                            STATUS="503 Service Unavailable"; RESP='{"error":"history_busy"}'
+                        fi
+                    fi
                 else
                     LIMIT="$(printf '%s' "$QUERY" | sed -n 's/.*limit=\([0-9]\{1,4\}\).*/\1/p')"
                     RESP="$(history_json "${LIMIT:-100}")"
@@ -628,7 +655,7 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             ;;
         *)
             STATUS="404 Not Found"
-            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/fs/read","/fs/write","/system/network","/system/processes","/system/disk","/system/memory"]}'
+            RESP='{"error":"unknown_path","routes":["/ui","/setup/status","/setup/init","/auth/login","/auth/logout","/health","/provider","/hardware","/llm","/llm/test","/llm/models","/agent/tools","/prompt","/history","/chat","/ai","/intent","/memory","/memory/stats","/comb/stage","/comb/recall","/comb/stats","/exec","/fs/read","/fs/write","/system/network","/system/processes","/system/disk","/system/memory"]}'
             ;;
     esac
 fi
@@ -638,6 +665,6 @@ if [ -n "$RESP_FILE" ]; then
 else
     RESP_LEN="$(printf '%s' "$RESP" | wc -c | tr -d ' ')"
 fi
-printf "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Session-Token, X-OSYM-Path, X-OSYM-User-Confirmed\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n%b\r\n" "$STATUS" "$CONTENT_TYPE" "$RESP_LEN" "$EXTRA_HEADERS"
+printf "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Session-Token, X-OSYM-Path, X-OSYM-User-Confirmed, X-OSYM-History-Role\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n%b\r\n" "$STATUS" "$CONTENT_TYPE" "$RESP_LEN" "$EXTRA_HEADERS"
 if [ -n "$RESP_FILE" ]; then cat "$RESP_FILE"; else printf '%s' "$RESP"; fi
 rm -f "$BODY_FILE"

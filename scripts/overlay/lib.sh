@@ -216,6 +216,19 @@ llm_call_raw() {
         "$(cfg_get base_url | sed 's#/*$##')/chat/completions" 2>/dev/null
 }
 
+llm_tools_raw() {
+    _messages="${1#\[}"
+    _messages="${_messages%\]}"
+    _payload="{\"model\":\"$(cfg_get model)\",\"messages\":[{\"role\":\"system\",\"content\":\"$(json_escape "$(prompt_get) Never claim a tool succeeded until its result confirms success. Mutating operations require explicit user approval.")\"},$_messages],\"temperature\":$(cfg_get temperature),\"max_tokens\":$(cfg_get max_tokens),\"stream\":false,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"os_exec\",\"description\":\"Propose a shell command. It will only run after explicit user approval.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"],\"additionalProperties\":false}}},{\"type\":\"function\",\"function\":{\"name\":\"os_read_file\",\"description\":\"Read a text file from the guest system.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}}},{\"type\":\"function\",\"function\":{\"name\":\"os_write_file\",\"description\":\"Propose writing text to a file. It will only be written after explicit user approval.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"],\"additionalProperties\":false}}}],\"tool_choice\":\"auto\"}"
+    wget -qO- -T 60 \
+        --header="Content-Type: application/json" \
+        --header="Authorization: ******" \
+        --header="HTTP-Referer: https://osymbiote.local" \
+        --header="X-Title: OSymbiote" \
+        --post-data="$_payload" \
+        "$(cfg_get base_url | sed 's#/*$##')/chat/completions" 2>/dev/null
+}
+
 # llm_chat PLAIN_TEXT — sets LLM_REPLY (JSON-escaped) or LLM_ERR; records history on success
 llm_chat() {
     LLM_REPLY=""; LLM_ERR=""
