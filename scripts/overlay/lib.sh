@@ -20,7 +20,7 @@ SYSTEM_CONFIG_KEYS="web_role fs_read_role fs_write_role exec_role config_role su
 
 env_key_valid() {
     case "$1" in
-        OSYM_OPENAI_API_KEY|OSYM_OPENAI_BASE_URL|OSYM_OPENAI_MODEL|OSYM_AI_PROVIDER|\
+        OSYM_OPENAI_API_KEY|OSYM_LEGACY_API_KEY|OSYM_OPENAI_BASE_URL|OSYM_OPENAI_MODEL|OSYM_AI_PROVIDER|\
         OPENAI_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GROQ_API_KEY) return 0 ;;
         *) return 1 ;;
     esac
@@ -29,6 +29,7 @@ env_key_valid() {
 env_load() {
     [ -r "$ENV_FILE" ] || return 0
     [ "${OSYM_OPENAI_API_KEY+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_API_KEY)"; [ -z "$_v" ] || export "OSYM_OPENAI_API_KEY=$_v"; }
+    [ "${OSYM_LEGACY_API_KEY+x}" = x ] || { _v="$(env_file_get OSYM_LEGACY_API_KEY)"; [ -z "$_v" ] || export "OSYM_LEGACY_API_KEY=$_v"; }
     [ "${OSYM_OPENAI_BASE_URL+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_BASE_URL)"; [ -z "$_v" ] || export "OSYM_OPENAI_BASE_URL=$_v"; }
     [ "${OSYM_OPENAI_MODEL+x}" = x ] || { _v="$(env_file_get OSYM_OPENAI_MODEL)"; [ -z "$_v" ] || export "OSYM_OPENAI_MODEL=$_v"; }
     [ "${OSYM_AI_PROVIDER+x}" = x ] || { _v="$(env_file_get OSYM_AI_PROVIDER)"; [ -z "$_v" ] || export "OSYM_AI_PROVIDER=$_v"; }
@@ -60,7 +61,7 @@ env_stage_unset() {
 }
 
 env_stage_clear_secrets() {
-    for _env_key in OSYM_OPENAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY \
+    for _env_key in OSYM_OPENAI_API_KEY OSYM_LEGACY_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY \
         ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY; do
         env_stage_unset "$1" "$_env_key" || return 1
     done
@@ -93,7 +94,7 @@ env_unset() {
         chmod 600 "$_tmp" 2>/dev/null
         mv "$_tmp" "$ENV_FILE" || { rm -f "$_tmp"; lock_release; return 2; }
     fi
-    unset OSYM_OPENAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY
+    unset OSYM_OPENAI_API_KEY OSYM_LEGACY_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY
     if [ -f "$CFG_FILE" ]; then
         _tmp="$CFG_FILE.$$"
         grep -v '^api_key=' "$CFG_FILE" > "$_tmp" || true
@@ -145,6 +146,7 @@ provider_default() {
 cfg_get() {
     case "$1" in
         api_key)
+            if grep -q '^api_key=' "$CFG_FILE" 2>/dev/null; then cfg_migrate_legacy_api_key || true; fi
             _v="${OSYM_OPENAI_API_KEY:-}"
             [ -n "$_v" ] || _v="${OPENAI_API_KEY:-}"
             [ -n "$_v" ] || _v="$(env_file_get OSYM_OPENAI_API_KEY)"
@@ -155,6 +157,7 @@ cfg_get() {
                 gemini) _v="${_v:-${GEMINI_API_KEY:-$(env_file_get GEMINI_API_KEY)}}" ;;
                 groq) _v="${_v:-${GROQ_API_KEY:-$(env_file_get GROQ_API_KEY)}}" ;;
             esac
+            [ -n "$_v" ] || _v="${OSYM_LEGACY_API_KEY:-$(env_file_get OSYM_LEGACY_API_KEY)}"
             [ -n "$_v" ] || _v="$(grep '^api_key=' "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
             ;;
         *) _v="$(grep "^$1=" "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)" ;;
@@ -204,6 +207,62 @@ lock_release() {
     LOCK_PATH=""
 }
 
+cfg_migrate_legacy_api_key() {
+    lock_acquire config || return 1
+    _legacy_key="$(grep '^api_key=' "$CFG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
+    if [ -z "$_legacy_key" ]; then
+        lock_release
+        return 0
+    fi
+    if ! cfg_validate api_key "$_legacy_key"; then
+        lock_release
+        return 1
+    fi
+    _env_stage="$ENV_FILE.migrate.$$"
+    _cfg_stage="$CFG_FILE.migrate.$$"
+    _env_backup="$ENV_FILE.backup.$$"
+    _env_existed=0
+    if [ -f "$ENV_FILE" ]; then
+        _env_existed=1
+        cp "$ENV_FILE" "$_env_stage" 2>/dev/null || { lock_release; return 1; }
+        cp "$ENV_FILE" "$_env_backup" 2>/dev/null || {
+            rm -f "$_env_stage"; lock_release; return 1
+        }
+    else
+        : > "$_env_stage" || { lock_release; return 1; }
+    fi
+    if ! env_stage_value "$_env_stage" OSYM_LEGACY_API_KEY "$_val"; then
+        rm -f "$_env_stage" "$_env_stage.next" "$_env_backup"
+        lock_release
+        return 1
+    fi
+    grep -v '^api_key=' "$CFG_FILE" > "$_cfg_stage"
+    _grep_status=$?
+    if [ "$_grep_status" -gt 1 ] || ! chmod 600 "$_env_stage" "$_cfg_stage" 2>/dev/null; then
+        rm -f "$_env_stage" "$_env_stage.next" "$_cfg_stage" "$_env_backup"
+        lock_release
+        return 1
+    fi
+    if ! mv "$_env_stage" "$ENV_FILE"; then
+        rm -f "$_env_stage" "$_env_stage.next" "$_cfg_stage" "$_env_backup"
+        lock_release
+        return 1
+    fi
+    if ! mv "$_cfg_stage" "$CFG_FILE"; then
+        if [ "$_env_existed" -eq 1 ]; then
+            mv "$_env_backup" "$ENV_FILE" 2>/dev/null || true
+        else
+            rm -f "$ENV_FILE"
+        fi
+        rm -f "$_env_stage" "$_env_stage.next" "$_cfg_stage" "$_env_backup"
+        lock_release
+        return 1
+    fi
+    rm -f "$_env_backup"
+    lock_release
+    return 0
+}
+
 # cfg_set KEY VALUE — returns 0 on success, 1 invalid key, 2 invalid value
 cfg_validate() {
     cfg_key_valid "$1" || return 1
@@ -227,7 +286,11 @@ cfg_validate() {
 
 cfg_set() {
     cfg_validate "$1" "$2" || return $?
-    [ "$1" != api_key ] || { env_set api_key "$2"; return $?; }
+    if [ "$1" = api_key ]; then
+        env_set api_key "$2" || return $?
+        cfg_migrate_legacy_api_key >/dev/null 2>&1 || return 3
+        return 0
+    fi
     lock_acquire config || return 3
     mkdir -p "$OSYM_DATA"
     _tmp="$CFG_FILE.$$"
