@@ -168,7 +168,7 @@ pre{margin:0;padding:12px;border-radius:10px;border:1px solid var(--border);back
 
 <script>
 const $=id=>document.getElementById(id);
-let poll=null,tab='chat',chatLoaded=false;
+let poll=null,tab='chat',chatLoaded=false,chatPending=false;
 async function api(url,opt){
   opt=opt||{};
   try{const r=await fetch(url,{credentials:'same-origin',...opt});const t=await r.text();let d;try{d=JSON.parse(t)}catch{d={raw:t}}
@@ -212,11 +212,16 @@ async function loadChat(){
   if(!$('msgs').children.length)addMsg('assistant','Hello. I am OSymbiote — the agent that is this operating system. Ask me anything, or press “Intent” to run a system query (network, disk, process, memory, uptime).');
 }
 async function sendChat(){
+  if(chatPending)return;
   const q=$('prompt').value.trim();if(!q)return;$('prompt').value='';addMsg('user',q);
-  const t=addMsg('assistant','');t.classList.add('typing');t.innerHTML='<span></span><span></span><span></span>';$('sendBtn').disabled=true;
-  const r=await api('/chat',{method:'POST',body:q});$('sendBtn').disabled=false;t.remove();
-  if(r.ok)addMsg('assistant',r.data.response||JSON.stringify(r.data));else addMsg('err','Error: '+(r.data.error||r.code));
-  loadChatSub();
+  chatPending=true;$('sendBtn').disabled=true;
+  const t=addMsg('assistant','');t.classList.add('typing');t.innerHTML='<span></span><span></span><span></span>';
+  try{
+    const r=await api('/chat',{method:'POST',body:q});t.remove();
+    if(r.ok)addMsg('assistant',r.data.response||JSON.stringify(r.data));else addMsg('err','Error: '+(r.data.error||r.code));
+    loadChatSub();
+  }catch(e){t.remove();addMsg('err','Error: request failed')}
+  finally{chatPending=false;$('sendBtn').disabled=false}
 }
 async function loadChatSub(){const l=await api('/llm');if(l.ok)$('chatSub').textContent=l.data.api_key_set?'Model: '+l.data.model+' via '+l.data.provider:'No API key yet — open “LLM & Provider” to configure.'}
 async function runIntent(){

@@ -36,9 +36,21 @@ done
 
 BODY=""
 case "$CONTENT_LENGTH" in ''|*[!0-9]*) CONTENT_LENGTH=0 ;; esac
-[ "$CONTENT_LENGTH" -gt 65536 ] && CONTENT_LENGTH=65536
+BODY_TOO_LARGE=0
+if [ "$CONTENT_LENGTH" -gt 65536 ]; then BODY_TOO_LARGE=1; fi
 if [ "$CONTENT_LENGTH" -gt 0 ]; then
-    BODY="$(head -c "$CONTENT_LENGTH" 2>/dev/null || true)"
+    [ "$BODY_TOO_LARGE" -eq 1 ] && CONTENT_LENGTH=0
+    if [ "$CONTENT_LENGTH" -gt 0 ]; then
+        BODY_FILE="$(mktemp /tmp/osym-body.XXXXXX)" || exit 0
+        if ! timeout 15 head -c "$CONTENT_LENGTH" > "$BODY_FILE" 2>/dev/null; then
+            rm -f "$BODY_FILE"; exit 0
+        fi
+        [ "$(wc -c < "$BODY_FILE" | tr -d ' ')" -eq "$CONTENT_LENGTH" ] || {
+            rm -f "$BODY_FILE"; exit 0
+        }
+        BODY="$(cat "$BODY_FILE")"
+        rm -f "$BODY_FILE"
+    fi
 fi
 
 STATUS="200 OK"
@@ -140,6 +152,76 @@ record_auth_failure() {
 
 record_auth_success() { printf '0 0\n' > "$AUTH_FAIL_FILE"; }
 
+handle_setup_init() {
+    if ! lock_acquire auth; then
+        STATUS="503 Service Unavailable"; RESP='{"error":"auth_busy"}'; return
+    fi
+    if ! check_rate_limit || ! check_lockout; then :
+    elif is_setup_complete; then
+        STATUS="409 Conflict"; RESP='{"error":"already_initialized"}'
+    elif [ "$METHOD" != "POST" ]; then
+        STATUS="405 Method Not Allowed"; RESP='{"error":"use POST with password body"}'
+    elif [ "${#BODY}" -lt 8 ]; then
+        STATUS="400 Bad Request"; RESP='{"error":"password_too_short","min_length":8}'
+    elif ! set_password_unlocked "$BODY"; then
+        STATUS="500 Internal Server Error"; RESP='{"error":"setup_failed"}'
+    else
+        RESP='{"status":"initialized","next":"POST /auth/login"}'
+    fi
+    lock_release
+}
+
+handle_auth_login() {
+    if ! lock_acquire auth; then
+        STATUS="503 Service Unavailable"; RESP='{"error":"auth_busy"}'; return
+    fi
+    if ! check_rate_limit || ! check_lockout; then :
+    elif [ "$METHOD" != "POST" ]; then
+        STATUS="405 Method Not Allowed"; RESP='{"error":"use POST with password body"}'
+    elif [ -z "$BODY" ]; then
+        STATUS="400 Bad Request"; RESP='{"error":"missing_password"}'
+    else
+        SALT="$(cut -d: -f1 "$PASS_FILE" 2>/dev/null)"
+        EXPECTED_HASH="$(cut -d: -f2 "$PASS_FILE" 2>/dev/null)"
+        GOT_HASH="$(hash_secret "$BODY" "$SALT")"
+        if [ -n "$EXPECTED_HASH" ] && [ "$GOT_HASH" = "$EXPECTED_HASH" ]; then
+            record_auth_success
+            NOW="$(now_epoch)"
+            EXPIRES_AT=$((NOW + SESSION_TTL))
+            TOKEN_SRC="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+            if [ -z "$TOKEN_SRC" ] && [ -r /dev/urandom ]; then
+                TOKEN_SRC="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+            fi
+            [ -n "$TOKEN_SRC" ] || TOKEN_SRC="${NOW}-$$-$(cat /proc/uptime 2>/dev/null)"
+            TOKEN="$(printf '%s' "$TOKEN_SRC" | sha256sum | awk '{print $1}')"
+            _session_tmp="$SESSION_FILE.$$"
+            if printf '%s|%s\n' "$TOKEN" "$EXPIRES_AT" > "$_session_tmp" &&
+                chmod 600 "$_session_tmp" 2>/dev/null && mv "$_session_tmp" "$SESSION_FILE"; then
+                EXTRA_HEADERS="Set-Cookie: osym_session=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}\r\n"
+                RESP="{\"status\":\"ok\",\"expires_in\":$SESSION_TTL}"
+            else
+                rm -f "$_session_tmp"
+                STATUS="500 Internal Server Error"; RESP='{"error":"session_create_failed"}'
+            fi
+        else
+            record_auth_failure
+            STATUS="401 Unauthorized"; RESP='{"error":"invalid_credentials"}'
+        fi
+    fi
+    lock_release
+}
+
+handle_auth_logout() {
+    if lock_acquire auth; then
+        rm -f "$SESSION_FILE" 2>/dev/null || true
+        lock_release
+        EXTRA_HEADERS="Set-Cookie: osym_session=deleted; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n"
+        RESP='{"status":"logged_out"}'
+    else
+        STATUS="503 Service Unavailable"; RESP='{"error":"auth_busy"}'
+    fi
+}
+
 need_post() {
     if [ "$METHOD" != "POST" ]; then
         STATUS="405 Method Not Allowed"
@@ -149,22 +231,76 @@ need_post() {
     return 0
 }
 
-# Applies "key=value" lines from $BODY to the LLM config.
+# Apply a complete config request under one lock so rejected updates never partially commit.
+stage_config_value() {
+    _stage_next="$1.next"
+    grep -v "^$2=" "$1" > "$_stage_next"
+    _grep_status=$?
+    [ "$_grep_status" -le 1 ] || { rm -f "$_stage_next"; return 1; }
+    printf '%s=%s\n' "$2" "$3" >> "$_stage_next" || { rm -f "$_stage_next"; return 1; }
+    mv "$_stage_next" "$1"
+}
+
+stage_config_unset() {
+    _stage_next="$1.next"
+    grep -v "^$2=" "$1" > "$_stage_next"
+    _grep_status=$?
+    [ "$_grep_status" -le 1 ] || { rm -f "$_stage_next"; return 1; }
+    mv "$_stage_next" "$1"
+}
+
 apply_llm_body() {
-    printf '%s\n' "$BODY" | tr -d '\r' | while IFS= read -r line; do
+    lock_acquire config || { printf 'config_busy'; return; }
+    _stage="$OSYM_DATA/config.stage.$$"
+    _body_file="$OSYM_DATA/config.body.$$"
+    _errors="$OSYM_DATA/config.errors.$$"
+    if [ -f "$CFG_FILE" ]; then
+        cp "$CFG_FILE" "$_stage" 2>/dev/null || {
+            lock_release; printf 'config_stage_failed'; return
+        }
+    else
+        : > "$_stage" || { lock_release; printf 'config_stage_failed'; return; }
+    fi
+    printf '%s\n' "$BODY" > "$_body_file" || {
+        rm -f "$_stage" "$_body_file"; lock_release; printf 'config_stage_failed'; return
+    }
+    : > "$_errors"
+    while IFS= read -r line || [ -n "$line" ]; do
         [ -n "$line" ] || continue
         k="${line%%=*}"
         v="${line#*=}"
-        [ "$k" != "$line" ] || { echo "bad:$line"; continue; }
+        [ "$k" != "$line" ] || { printf 'bad_line\n' >> "$_errors"; continue; }
         if [ "$k" = "preset" ]; then
-            llm_preset "$v" || echo "bad_preset:$v"
+            case "$v" in
+                openrouter)
+                    stage_config_value "$_stage" provider openrouter && stage_config_value "$_stage" base_url https://openrouter.ai/api/v1 || printf 'config_stage_failed\n' >> "$_errors" ;;
+                openai)
+                    stage_config_value "$_stage" provider openai && stage_config_value "$_stage" base_url https://api.openai.com/v1 || printf 'config_stage_failed\n' >> "$_errors" ;;
+                ollama)
+                    stage_config_value "$_stage" provider ollama && stage_config_value "$_stage" base_url http://10.0.2.2:11434/v1 || printf 'config_stage_failed\n' >> "$_errors" ;;
+                lmstudio)
+                    stage_config_value "$_stage" provider lmstudio && stage_config_value "$_stage" base_url http://10.0.2.2:1234/v1 || printf 'config_stage_failed\n' >> "$_errors" ;;
+                *) printf 'bad_preset\n' >> "$_errors" ;;
+            esac
         elif [ "$k" = "api_key" ] && [ -z "$v" ]; then
-            cfg_unset api_key
+            stage_config_unset "$_stage" api_key || printf 'config_stage_failed\n' >> "$_errors"
         else
-            cfg_set "$k" "$v"
-            case $? in 1) echo "unknown_key:$k" ;; 2) echo "invalid_value:$k" ;; esac
+            cfg_validate "$k" "$v"
+            case $? in
+                0) stage_config_value "$_stage" "$k" "$_val" || printf 'config_stage_failed\n' >> "$_errors" ;;
+                1) printf 'unknown_key:%s\n' "$k" >> "$_errors" ;;
+                *) printf 'invalid_value:%s\n' "$k" >> "$_errors" ;;
+            esac
         fi
-    done
+    done < "$_body_file"
+    if [ ! -s "$_errors" ]; then
+        if ! chmod 600 "$_stage" 2>/dev/null || ! mv "$_stage" "$CFG_FILE"; then
+            printf 'config_commit_failed\n' >> "$_errors"
+        fi
+    fi
+    cat "$_errors"
+    rm -f "$_stage" "$_stage.next" "$_body_file" "$_errors"
+    lock_release
 }
 
 run_intent() {
@@ -203,7 +339,10 @@ run_intent() {
     fi
 }
 
-if [ "$METHOD" = "OPTIONS" ]; then
+if [ "$BODY_TOO_LARGE" -eq 1 ]; then
+    STATUS="413 Payload Too Large"
+    RESP='{"error":"request_too_large","max_bytes":65536}'
+elif [ "$METHOD" = "OPTIONS" ]; then
     STATUS="204 No Content"
 elif ! is_setup_complete; then
     case "$PATH_ONLY" in
@@ -237,51 +376,13 @@ if [ -z "$RESP" ] && [ "$STATUS" = "200 OK" ]; then
             else RESP='{"needs_setup":true,"setup_complete":false}'; fi
             ;;
         /setup/init)
-            if ! check_rate_limit || ! check_lockout; then :
-            elif is_setup_complete; then
-                STATUS="409 Conflict"; RESP='{"error":"already_initialized"}'
-            elif [ "$METHOD" != "POST" ]; then
-                STATUS="405 Method Not Allowed"; RESP='{"error":"use POST with password body"}'
-            elif [ "${#BODY}" -lt 8 ]; then
-                STATUS="400 Bad Request"; RESP='{"error":"password_too_short","min_length":8}'
-            else
-                set_password "$BODY"
-                RESP='{"status":"initialized","next":"POST /auth/login"}'
-            fi
+            handle_setup_init
             ;;
         /auth/login)
-            if ! check_rate_limit || ! check_lockout; then :
-            elif [ "$METHOD" != "POST" ]; then
-                STATUS="405 Method Not Allowed"; RESP='{"error":"use POST with password body"}'
-            elif [ -z "$BODY" ]; then
-                STATUS="400 Bad Request"; RESP='{"error":"missing_password"}'
-            else
-                SALT="$(cut -d: -f1 "$PASS_FILE" 2>/dev/null)"
-                EXPECTED_HASH="$(cut -d: -f2 "$PASS_FILE" 2>/dev/null)"
-                GOT_HASH="$(hash_secret "$BODY" "$SALT")"
-                if [ -n "$EXPECTED_HASH" ] && [ "$GOT_HASH" = "$EXPECTED_HASH" ]; then
-                    record_auth_success
-                    NOW="$(now_epoch)"
-                    EXPIRES_AT=$((NOW + SESSION_TTL))
-                    TOKEN_SRC="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
-                    if [ -z "$TOKEN_SRC" ] && [ -r /dev/urandom ]; then
-                        TOKEN_SRC="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-                    fi
-                    [ -n "$TOKEN_SRC" ] || TOKEN_SRC="${NOW}-$$-$(cat /proc/uptime 2>/dev/null)"
-                    TOKEN="$(printf '%s' "$TOKEN_SRC" | sha256sum | awk '{print $1}')"
-                    printf '%s|%s\n' "$TOKEN" "$EXPIRES_AT" > "$SESSION_FILE"
-                    EXTRA_HEADERS="Set-Cookie: osym_session=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}\r\n"
-                    RESP="{\"status\":\"ok\",\"expires_in\":$SESSION_TTL}"
-                else
-                    record_auth_failure
-                    STATUS="401 Unauthorized"; RESP='{"error":"invalid_credentials"}'
-                fi
-            fi
+            handle_auth_login
             ;;
         /auth/logout)
-            rm -f "$SESSION_FILE" 2>/dev/null || true
-            EXTRA_HEADERS="Set-Cookie: osym_session=deleted; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n"
-            RESP='{"status":"logged_out"}'
+            handle_auth_logout
             ;;
         /health)
             if is_authenticated; then AUTH_STATE=true; else AUTH_STATE=false; fi

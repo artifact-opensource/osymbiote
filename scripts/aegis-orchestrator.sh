@@ -4,6 +4,7 @@
 # Run from Dragonfly.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 AEGIS_USER="u0_a473"
 AEGIS_HOST="192.168.1.3"
@@ -62,16 +63,20 @@ verify_aegis() {
 # ── Phase 1: Deploy build scripts ──
 deploy() {
     log "Deploying OSymbiote build to AEGIS..."
-    
+
     # Create dirs
-    $AEGIS_SSH "mkdir -p ~/osymbiote/{build,images,rootfs}"
+    $AEGIS_SSH "mkdir -p ~/osymbiote/scripts ~/osymbiote/{build,images,rootfs}"
     
-    # Copy build script
+    # Preserve the scripts/overlay layout expected by build-phase1.sh.
     scp -P $AEGIS_PORT \
-        /home/adam/workspace/projects/symbiote-os/scripts/build-phase1.sh \
-        "${AEGIS_USER}@${AEGIS_HOST}:~/osymbiote/build.sh"
-    
-    $AEGIS_SSH "chmod +x ~/osymbiote/build.sh"
+        "$SCRIPT_DIR/build-phase1.sh" \
+        "${AEGIS_USER}@${AEGIS_HOST}:~/osymbiote/scripts/build-phase1.sh"
+    $AEGIS_SSH "rm -rf ~/osymbiote/scripts/overlay.new"
+    scp -P $AEGIS_PORT -r "$SCRIPT_DIR/overlay" \
+        "${AEGIS_USER}@${AEGIS_HOST}:~/osymbiote/scripts/overlay.new"
+    $AEGIS_SSH "rm -rf ~/osymbiote/scripts/overlay && mv ~/osymbiote/scripts/overlay.new ~/osymbiote/scripts/overlay"
+
+    $AEGIS_SSH "chmod +x ~/osymbiote/scripts/build-phase1.sh"
     ok "Build scripts deployed"
 }
 
@@ -80,7 +85,7 @@ build() {
     log "Starting Phase 1 build on AEGIS..."
     
     # Run build with output capture
-    $AEGIS_SSH "cd ~/osymbiote && bash build.sh 2>&1 | tee build.log" &
+    $AEGIS_SSH "cd ~/osymbiote && bash scripts/build-phase1.sh 2>&1 | tee build.log" &
     BUILD_PID=$!
     
     # Monitor

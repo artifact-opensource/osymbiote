@@ -97,7 +97,9 @@ llm() {
         test)
             shift 2>/dev/null
             if llm_chat "${*:-Reply with the single word: pong}"; then printf '%s\n' "$LLM_REPLY" | json_unescape; else c_err "failed: $LLM_ERR"; return 1; fi ;;
-        reset) rm -f "$CFG_FILE"; c_ok "LLM configuration reset to defaults" ;;
+        reset)
+            if lock_acquire config; then rm -f "$CFG_FILE"; lock_release; c_ok "LLM configuration reset to defaults"
+            else c_err "could not lock LLM configuration"; return 1; fi ;;
         *) c_err "usage: llm [show|preset|set|key|url|model|models|test|reset]"; return 1 ;;
     esac
 }
@@ -193,7 +195,7 @@ doctor() {
     done
     for _c in sh ls cat echo mkdir mount umount ip grep awk sed nc wget date cut wc tail head sleep kill test tr \
               hostname uname free df ps udhcpc vi dmesg mknod chmod chown cp mv rm ln touch stat sha256sum od sort \
-              uniq tee clear find xargs printf stty setsid ping top du env basename dirname id whoami reboot poweroff halt; do
+              uniq tee clear find xargs printf stty setsid ping top du env timeout basename dirname id whoami reboot poweroff halt; do
         command -v "$_c" >/dev/null 2>&1 || { c_err "missing command: $_c"; _miss=1; }
     done
     command -v comb >/dev/null 2>&1 || { c_err "missing command: comb"; _miss=1; }

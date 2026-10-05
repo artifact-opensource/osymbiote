@@ -60,20 +60,31 @@ command -v qemu-system-x86_64 >/dev/null 2>&1 || echo "  WARN: qemu-system-x86_6
 # Step 2: Get x86_64 kernel (Alpine netboot)
 # ═══════════════════════════════════════════════
 echo "[2/6] Getting x86_64 kernel..."
-if [ ! -f "$BUILD/vmlinuz" ]; then
-    wget -q --show-progress -O "$BUILD/vmlinuz" \
-        "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/vmlinuz-virt" 2>&1 || {
-        echo "  Primary failed, trying mirror..."
-        wget -q -O "$BUILD/vmlinuz" \
-            "https://mirrors.edge.kernel.org/alpine/v3.21/releases/x86_64/netboot/vmlinuz-virt" 2>&1 || {
-            echo "  ERROR: Cannot download kernel. Check internet."
-            exit 1
-        }
-    }
-    echo "  Kernel: $(du -h "$BUILD/vmlinuz" | cut -f1)"
-else
-    echo "  Kernel cached."
-fi
+PAIR_TMP="$(mktemp -d)"
+BB_TMPDIR=""
+cleanup_build_tmp() {
+    [ -z "$PAIR_TMP" ] || rm -rf "$PAIR_TMP"
+    [ -z "$BB_TMPDIR" ] || rm -rf "$BB_TMPDIR"
+}
+trap cleanup_build_tmp EXIT
+download_file "$PAIR_TMP/vmlinuz" \
+    "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/vmlinuz-virt" \
+    "https://mirrors.edge.kernel.org/alpine/v3.21/releases/x86_64/netboot/vmlinuz-virt" || {
+    echo "  ERROR: Cannot download kernel. Check internet."
+    exit 1
+}
+download_file "$PAIR_TMP/initramfs-virt" \
+    "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/initramfs-virt" || {
+    echo "  ERROR: Cannot download Alpine initramfs (NIC modules)."
+    exit 1
+}
+gzip -t "$PAIR_TMP/initramfs-virt" || {
+    echo "  ERROR: Downloaded Alpine initramfs is invalid."
+    exit 1
+}
+mv "$PAIR_TMP/vmlinuz" "$BUILD/vmlinuz"
+mv "$PAIR_TMP/initramfs-virt" "$BUILD/initramfs-virt"
+echo "  Kernel and module archive refreshed together: $(du -h "$BUILD/vmlinuz" | cut -f1)"
 
 # ═══════════════════════════════════════════════
 # Step 3: Get x86_64 static busybox
@@ -85,16 +96,15 @@ if [ ! -f "$BUILD/busybox-x86_64" ]; then
         "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" \
         "https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64"; then
         echo "  busybox.net failed, trying Alpine busybox-static..."
-        TMPDIR="$(mktemp -d)"
-        trap 'rm -rf "$TMPDIR"' EXIT
+        BB_TMPDIR="$(mktemp -d)"
         APKINDEX_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/APKINDEX.tar.gz"
 
-        wget -q -O "$TMPDIR/APKINDEX.tar.gz" "$APKINDEX_URL" 2>/dev/null || {
+        wget -q -O "$BB_TMPDIR/APKINDEX.tar.gz" "$APKINDEX_URL" 2>/dev/null || {
             echo "  ERROR: Cannot fetch Alpine APK index."
             exit 1
         }
 
-        tar -xzf "$TMPDIR/APKINDEX.tar.gz" -C "$TMPDIR" APKINDEX
+        tar -xzf "$BB_TMPDIR/APKINDEX.tar.gz" -C "$BB_TMPDIR" APKINDEX
         BB_VER=$(
             awk -v RS='' '
                 $0 ~ /\nP:busybox-static\n/ {
@@ -103,7 +113,7 @@ if [ ! -f "$BUILD/busybox-x86_64" ]; then
                         exit
                     }
                 }
-            ' "$TMPDIR/APKINDEX"
+            ' "$BB_TMPDIR/APKINDEX"
         )
 
         [ -n "${BB_VER:-}" ] || {
@@ -112,23 +122,21 @@ if [ ! -f "$BUILD/busybox-x86_64" ]; then
         }
 
         APK_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/busybox-static-${BB_VER}.apk"
-        wget -q -O "$TMPDIR/busybox.apk" "$APK_URL" 2>/dev/null || {
+        wget -q -O "$BB_TMPDIR/busybox.apk" "$APK_URL" 2>/dev/null || {
             echo "  ERROR: Cannot download Alpine busybox-static package."
             exit 1
         }
 
-        if tar -tf "$TMPDIR/busybox.apk" | grep -q '^bin/busybox.static$'; then
-            tar -xzf "$TMPDIR/busybox.apk" -C "$TMPDIR" bin/busybox.static
-            cp "$TMPDIR/bin/busybox.static" "$BUILD/busybox-x86_64"
-        elif tar -tf "$TMPDIR/busybox.apk" | grep -q '^bin/busybox$'; then
-            tar -xzf "$TMPDIR/busybox.apk" -C "$TMPDIR" bin/busybox
-            cp "$TMPDIR/bin/busybox" "$BUILD/busybox-x86_64"
+        if tar -tf "$BB_TMPDIR/busybox.apk" | grep -q '^bin/busybox.static$'; then
+            tar -xzf "$BB_TMPDIR/busybox.apk" -C "$BB_TMPDIR" bin/busybox.static
+            cp "$BB_TMPDIR/bin/busybox.static" "$BUILD/busybox-x86_64"
+        elif tar -tf "$BB_TMPDIR/busybox.apk" | grep -q '^bin/busybox$'; then
+            tar -xzf "$BB_TMPDIR/busybox.apk" -C "$BB_TMPDIR" bin/busybox
+            cp "$BB_TMPDIR/bin/busybox" "$BUILD/busybox-x86_64"
         else
             echo "  ERROR: busybox binary not found in Alpine package."
             exit 1
         fi
-        rm -rf "$TMPDIR"
-        trap - EXIT
     fi
 
     chmod +x "$BUILD/busybox-x86_64"
@@ -165,7 +173,7 @@ for cmd in sh ash ls cat echo mkdir mount umount ip grep awk sed \
            chmod chown cp mv rm ln touch stat sha256sum od sort uniq tee \
            clear find xargs printf stty setsid cttyhack ping top du env \
            basename dirname id whoami uptime which less more sync pidof \
-           killall tcpsvd egrep fgrep seq expr rev tac nslookup netstat \
+           killall tcpsvd timeout egrep fgrep seq expr rev tac nslookup netstat \
            traceroute ifconfig route reboot poweroff halt; do
     ln -sf busybox "$cmd" 2>/dev/null || true
 done
@@ -181,22 +189,32 @@ cd "$INITRD/dev"
 # Note: mknod may fail in Termux (no root), QEMU devtmpfs handles it
 cd "$OSYM"
 
-# ── NIC drivers (modules in the Alpine virt kernel; needed for networking) ──
-if [ ! -f "$BUILD/initramfs-virt" ]; then
-    wget -q -O "$BUILD/initramfs-virt" \
-        "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/netboot/initramfs-virt" || \
-        { echo "  ERROR: Cannot download Alpine initramfs (NIC modules)."; exit 1; }
-fi
+# ── NIC drivers (modules in the freshly downloaded Alpine virt kernel pair) ──
+gzip -t "$BUILD/initramfs-virt" || {
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    echo "  ERROR: Alpine initramfs is corrupt."
+    exit 1
+}
 MODTMP="$(mktemp -d)"
-(cd "$MODTMP" && zcat "$BUILD/initramfs-virt" | cpio -id --quiet \
+(mkdir -p "$MODTMP/lib/modules")
+if ! (cd "$MODTMP" && zcat "$BUILD/initramfs-virt" | cpio -id --quiet \
     'lib/modules/*/kernel/drivers/net/ethernet/intel/e1000/*' \
     'lib/modules/*/kernel/drivers/net/virtio_net.ko*' \
     'lib/modules/*/kernel/drivers/net/net_failover.ko*' \
     'lib/modules/*/kernel/net/core/failover.ko*' \
-    'lib/modules/*/kernel/net/packet/af_packet.ko*' 2>/dev/null) || true
+    'lib/modules/*/kernel/net/packet/af_packet.ko*' 2>/dev/null); then
+    rm -rf "$MODTMP" "$INITRD/lib/modules" "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    echo "  ERROR: Cannot extract NIC modules from Alpine initramfs."
+    exit 1
+fi
 mkdir -p "$INITRD/lib/modules"
-find "$MODTMP/lib/modules" -name '*.ko*' -exec cp {} "$INITRD/lib/modules/" \; 2>/dev/null || true
+find "$MODTMP/lib/modules" -type f -name '*.ko*' -exec cp {} "$INITRD/lib/modules/" \;
 rm -rf "$MODTMP"
+if ! find "$INITRD/lib/modules" -maxdepth 1 -type f -name 'e1000.ko*' | grep -q .; then
+    rm -f "$BUILD/vmlinuz" "$BUILD/initramfs-virt"
+    echo "  ERROR: Required e1000 NIC module missing from Alpine initramfs."
+    exit 1
+fi
 echo "  NIC modules: $(ls "$INITRD/lib/modules" | tr '\n' ' ')"
 
 # ── Install OS overlay (init, shell, agent, UI, libs) ──

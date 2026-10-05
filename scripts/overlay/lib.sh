@@ -16,7 +16,15 @@ DEFAULT_SYSTEM_PROMPT="You are OSymbiote, an AI agent that is the operating syst
 CFG_KEYS="provider base_url model api_key temperature max_tokens history_turns"
 
 json_escape() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\r//g' -e 's/\t/\\t/g' | sed ':a;N;$!ba;s/\n/\\n/g'
+    printf '%s' "$1" | od -An -v -tu1 | LC_ALL=C awk '{
+        for (i = 1; i <= NF; i++) {
+            c = $i + 0
+            if (c < 32) printf "\\u%04x", c
+            else if (c == 34) printf "\\\""
+            else if (c == 92) printf "\\\\"
+            else printf "%c", c
+        }
+    }'
 }
 
 json_unescape() {
@@ -53,32 +61,86 @@ cfg_get() {
     printf '%s' "$_v"
 }
 
+# Lock directories serialize read/modify/write operations across shell and HTTP workers.
+lock_acquire() {
+    mkdir -p "$OSYM_DATA" || return 1
+    LOCK_PATH="$OSYM_DATA/$1.lock"
+    _wait=0
+    while ! mkdir "$LOCK_PATH" 2>/dev/null; do
+        _owner="$(cat "$LOCK_PATH/pid" 2>/dev/null)"
+        if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+            :
+        elif [ -n "$_owner" ] || [ "$_wait" -ge 2 ]; then
+            _stale="$LOCK_PATH.stale.$$"
+            if mv "$LOCK_PATH" "$_stale" 2>/dev/null; then
+                rm -rf "$_stale"
+                continue
+            fi
+        fi
+        [ "$_wait" -lt 30 ] || { LOCK_PATH=""; return 1; }
+        sleep 1
+        _wait=$((_wait + 1))
+    done
+    if ! printf '%s\n' "$$" > "$LOCK_PATH/pid"; then
+        rmdir "$LOCK_PATH" 2>/dev/null || true
+        LOCK_PATH=""
+        return 1
+    fi
+    return 0
+}
+
+lock_release() {
+    [ -n "${LOCK_PATH:-}" ] || return 0
+    _owner="$(cat "$LOCK_PATH/pid" 2>/dev/null)"
+    [ "$_owner" = "$$" ] && rm -rf "$LOCK_PATH"
+    LOCK_PATH=""
+}
+
 # cfg_set KEY VALUE — returns 0 on success, 1 invalid key, 2 invalid value
-cfg_set() {
+cfg_validate() {
     cfg_key_valid "$1" || return 1
     _val="$(printf '%s' "$2" | tr -d '\r\n')"
     case "$1" in
-        temperature) printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || return 2 ;;
-        max_tokens|history_turns) printf '%s' "$_val" | grep -Eq '^[0-9]{1,5}$' || return 2 ;;
+        temperature) printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]*)(\.[0-9]+)?$' || return 2 ;;
+        max_tokens|history_turns) printf '%s' "$_val" | grep -Eq '^(0|[1-9][0-9]{0,4})$' || return 2 ;;
         base_url) printf '%s' "$_val" | grep -Eq '^https?://[^ "]+$' || return 2 ;;
         model|provider) printf '%s' "$_val" | grep -Eq '^[A-Za-z0-9._:/@+-]+$' || return 2 ;;
         api_key) printf '%s' "$_val" | grep -Eq '^[^ "\\]+$' || return 2 ;;
     esac
+    return 0
+}
+
+cfg_set() {
+    cfg_validate "$1" "$2" || return $?
+    lock_acquire config || return 3
     mkdir -p "$OSYM_DATA"
     _tmp="$CFG_FILE.$$"
-    grep -v "^$1=" "$CFG_FILE" 2>/dev/null > "$_tmp"
+    grep -v "^$1=" "$CFG_FILE" 2>/dev/null > "$_tmp" || true
     printf '%s=%s\n' "$1" "$_val" >> "$_tmp"
     chmod 600 "$_tmp" 2>/dev/null
-    mv "$_tmp" "$CFG_FILE"
+    if mv "$_tmp" "$CFG_FILE"; then
+        lock_release
+        return 0
+    fi
+    rm -f "$_tmp"
+    lock_release
+    return 3
 }
 
 cfg_unset() {
     cfg_key_valid "$1" || return 1
-    [ -f "$CFG_FILE" ] || return 0
+    lock_acquire config || return 2
+    if [ ! -f "$CFG_FILE" ]; then lock_release; return 0; fi
     _tmp="$CFG_FILE.$$"
-    grep -v "^$1=" "$CFG_FILE" > "$_tmp"
+    grep -v "^$1=" "$CFG_FILE" > "$_tmp" || true
     chmod 600 "$_tmp" 2>/dev/null
-    mv "$_tmp" "$CFG_FILE"
+    if mv "$_tmp" "$CFG_FILE"; then
+        lock_release
+        return 0
+    fi
+    rm -f "$_tmp"
+    lock_release
+    return 2
 }
 
 mask_key() {
@@ -127,7 +189,11 @@ history_json() {
     _body="$(history_recent "${1:-100}" | sed 's/$/,/' | tr -d '\n' | sed 's/,$//')"
     printf '[%s]' "$_body"
 }
-history_clear() { rm -f "$HIST_FILE"; }
+history_clear() {
+    lock_acquire history || return 1
+    rm -f "$HIST_FILE"
+    lock_release
+}
 
 # ── LLM ──
 # llm_call_raw ESCAPED_USER_TEXT → raw provider response on stdout (return 1 on transport failure)
@@ -153,18 +219,21 @@ llm_call_raw() {
 # llm_chat PLAIN_TEXT — sets LLM_REPLY (JSON-escaped) or LLM_ERR; records history on success
 llm_chat() {
     LLM_REPLY=""; LLM_ERR=""
-    if [ -z "$(cfg_get api_key)" ]; then LLM_ERR="no_api_key"; return 1; fi
+    if ! lock_acquire history; then LLM_ERR="history_busy"; return 1; fi
+    if [ -z "$(cfg_get api_key)" ]; then LLM_ERR="no_api_key"; lock_release; return 1; fi
     _u="$(json_escape "$1")"
     _raw="$(llm_call_raw "$_u" | tr -d '\n')"
-    if [ -z "$_raw" ]; then LLM_ERR="provider_request_failed"; return 1; fi
+    if [ -z "$_raw" ]; then LLM_ERR="provider_request_failed"; lock_release; return 1; fi
     LLM_REPLY="$(printf '%s' "$_raw" | sed -nE 's/.*"content": *"(([^"\\]|\\.)*)".*/\1/p')"
     if [ -z "$LLM_REPLY" ]; then
         LLM_ERR="$(printf '%s' "$_raw" | sed -nE 's/.*"message": *"(([^"\\]|\\.)*)".*/\1/p' | head -n 1)"
         [ -n "$LLM_ERR" ] || LLM_ERR="empty_or_unparseable_response"
+        lock_release
         return 1
     fi
     history_add user "$_u"
     history_add assistant "$LLM_REPLY"
+    lock_release
     return 0
 }
 
@@ -176,7 +245,7 @@ llm_models_raw() {
 # ── Auth ──
 hash_secret() { printf '%s' "$2:$1" | sha256sum 2>/dev/null | awk '{print $1}'; }
 is_setup_complete() { [ -f "$SETUP_MARKER" ] && [ -s "$PASS_FILE" ]; }
-set_password() { # plain
+set_password_unlocked() { # plain; caller holds the auth lock
     [ "${#1}" -ge 8 ] || return 1
     mkdir -p "$AUTH_DIR"
     _salt="$(printf '%s' "$(now_epoch)-$$-$(cat /proc/uptime 2>/dev/null)-$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')" | sha256sum | cut -c1-16)"
@@ -184,4 +253,12 @@ set_password() { # plain
     chmod 600 "$PASS_FILE" 2>/dev/null
     now_iso > "$SETUP_MARKER"
     rm -f "$SESSION_FILE"
+}
+
+set_password() {
+    lock_acquire auth || return 1
+    set_password_unlocked "$1"
+    _rc=$?
+    lock_release
+    return "$_rc"
 }
